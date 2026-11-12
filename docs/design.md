@@ -1,0 +1,395 @@
+# Concurrent Inverted Index — Benchmark Design
+
+Nov 12, 2026 · Pietro Bertozzi
+
+## Overview
+
+The project compares inverted index implementations across four languages and several concurrency strategies, and measures performance only. It is the individual project for the Concurrent and Parallel Systems course (pass/fail), built to the standard of a portfolio project.
+
+This document fixes the shared benchmark design: repository layout, workload, data, CLI contract, results format, analysis plan and methodology. Each decision carries a short reason. The design of the individual variants (which partitioning and locking combinations to build) comes later, starting from the design space map in *Inverted index — mappa di progetto*.
+
+```
+  data/                    ─┐
+  corpus prefixes, queries  │
+                            │          CLI args
+  params.sh                ─┼──▶  bench/run.sh  ─────────▶  <variant>/run.sh
+  parameter value lists     │   discover, sweep, ◀─────────  same CLI in every language
+                            │       collect        TSV rows
+  impl/<lang>/<variant>/   ─┘          │
+  found by scanning folders            ▼
+                                  results.tsv  ──────────▶  Python analysis
+                             rows + context columns         speedup, efficiency, latency
+```
+
+Implementations know nothing about each other or the benchmark: the runner reads folders and parameters, calls each variant through the CLI contract, and adds context to the TSV rows it gets back.
+
+## Scope and non-goals
+
+The benchmark measures how fast each implementation builds and queries an inverted index on one machine, with all data in RAM.
+
+**In scope**
+
+- Languages: Java, Go, C++, C. *Why: four very different concurrency models (managed runtime with JIT, goroutines and channels, atomics with zero-cost abstractions, raw pthreads).*
+- Extensibility: adding a language or a variant must not require changing any shared tooling. *Why: the project should outlive the exam.*
+- Five workload modes: build, query, and three read/write mixes (section Workload model).
+- Boolean queries: single term, AND, OR.
+
+**Non-goals**
+
+- Accuracy metrics. *Why: an inverted index has no accuracy; it is either correct or not, and correctness is a gate, not a metric.*
+- Ranked retrieval (scoring, BM25).
+- Indexes larger than RAM, on-disk storage, multiple machines. *Why: a different problem (see the design space map).*
+- Positional indexes, stemming, lemmatization, stopword removal.
+
+## Repository layout and discovery
+
+The filesystem is the registry: the runner discovers every implementation by scanning folders, and no list of languages or variants exists anywhere. *Why: nothing to keep in sync, so nothing can drift from reality.*
+
+```
+bench/
+  run.sh            runner: discovers, builds, sweeps, collects
+  params.sh         numeric parameters (lists of values)
+corpus/             preprocessing scripts (raw Wikipedia → corpus, queries)
+data/               generated corpus prefixes and query files
+impl/
+  go/
+    _common/        shared Go code (skipped by the runner)
+    sequential/     a variant
+      build.sh
+      run.sh
+      dimensions.tsv
+    partition-lock/
+      ...
+  java/  cpp/  c/   same structure
+results/            one folder per experiment
+analysis/           Python notebooks and scripts (later)
+```
+
+**Rules**
+
+1. Every folder `impl/<language>/<variant>/` is one variant of one language. *Why: adding Rust means adding `impl/rust/`; nothing else changes.*
+2. Folders starting with `_` hold shared code and are not variants. *Why: input parsing, timing, output and dumping are written once per language, so a fix reaches every variant and the comparison stays fair.*
+3. Every variant has two executable entry points with fixed names: `build.sh` (compile this variant) and `run.sh` (start it with the CLI contract). *Why: language-specific knowledge stays in the language folder; the runner calls the same two commands for every language.*
+4. Every variant has a `dimensions.tsv` describing itself (section Dimensions). *Why: the description lives next to the code it describes.*
+5. Every language has a `sequential` variant. *Why: the baseline for absolute speedup and concurrency overhead.*
+
+## Dimensions
+
+The experiment space has two kinds of dimensions: **structural** choices change the code and define a variant; **numeric** parameters change without touching the code and live in `bench/params.sh`.
+
+### Structural dimensions (one folder per combination)
+
+From the design space map. Detailed design of each comes later.
+
+| Key | Options | Applies when |
+| --- | --- | --- |
+| `partitioning` | single · by-term · by-document | always |
+| `writer` | direct · central writer · writer per partition | always |
+| `coordination` | lock · CAS / lock-free | always; protects the index with direct writes, the queue with a dedicated writer |
+| `granularity` | index · partition · posting list | direct writes with locks |
+| `write_timing` | immediate · deferred | always |
+| `visibility` | partial · snapshot per document · snapshot per batch | mixed modes |
+
+The options form a tree, not a grid: many combinations do not exist, so the real number of variants is far smaller than the product.
+
+Each variant declares its choices in `dimensions.tsv`, one `key<TAB>value` line per dimension, plus which numeric parameters and modes it supports:
+
+```
+partitioning	by-term
+writer	direct
+coordination	lock
+granularity	partition
+uses	partitions,batch
+modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
+```
+
+- A missing key means "not applicable"; the runner writes `-`. *Why: a new dimension is added only to the variants it concerns, and old files stay valid.*
+- Key/value lines, not one wide row. *Why: adding a dimension never touches existing files.*
+- The runner sweeps only the parameters in `uses` and runs only the modes in `modes`. *Why: no identical repeated runs, no misleading rows.*
+
+### Numeric parameters (`bench/params.sh`)
+
+| Parameter | Meaning | Example values |
+| --- | --- | --- |
+| `MODES` | workload mode | build query mixed-95-5 mixed-50-50 mixed-20-80 |
+| `THREADS` | number of workers N | 1 2 4 6 8 12 14 16 22 |
+| `CORPORA` | corpus prefixes | 256 MB · 512 MB · … · 4 GB of text |
+| `SCALING` | how total work is set | strong · weak |
+| `PARTITIONS` | partitions, if used | 4 16 64 |
+| `BATCH` | postings per lock or message, if used | 1 64 1024 |
+| `QUEUE` | queue capacity, if used | to be sized |
+| `PINNING` | CPU placement | none · pcores |
+| `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
+| `TIMEOUT` | limit per run | 30 min to start |
+
+The file is plain bash, read with `source`. *Why: no parsing and no dependency; every implementation gets exactly the same values from one place.* Language is not a parameter: the folder says it.
+
+## Workload model
+
+Every run has N workers, and each worker performs operations according to the mode: a mode is just the probability that an operation is a query rather than an insert.
+
+| Mode | Query share | Insert share | Starts from | Typical of |
+| --- | --- | --- | --- | --- |
+| `build` | 0% | 100% | empty index | batch indexing |
+| `query` | 100% | 0% | finished index (built first) | serving a fixed index |
+| `mixed-95-5` | 95% | 5% | preloaded index | search engine (read-heavy) |
+| `mixed-50-50` | 50% | 50% | preloaded index | balanced |
+| `mixed-20-80` | 20% | 80% | preloaded index | bulk ingestion with occasional queries |
+
+- **Ratios are per operation, not per thread.** *Why: works at any N, including 1 and odd values; it is the method of the standard YCSB benchmark. Splitting threads into readers and writers breaks at small N.*
+- **Mixed modes preload part of the corpus, untimed.** Inserts then take the next documents in order. *Why: queries on an empty index would be artificially fast.*
+- **Closed loop:** each worker starts its next operation as soon as the previous one ends. *Why: measures maximum capacity, the right question for comparing strategies. Limitation, stated in the report: closed loop understates tail latency under overload (coordinated omission). An open-loop generator was judged too costly for its benefit.*
+- **Strong and weak scaling** in every mode. Strong: fixed total work, more workers. Weak: work proportional to N. *Why: strong scaling shows speedup; weak scaling shows whether larger problems stay manageable.* For build and query, the corpus size sets the work; for mixed modes, the total number of operations does.
+
+## Data
+
+All implementations read the same preprocessed English Wikipedia, so text handling is decided once and can never differ between languages.
+
+### Corpus
+
+- **Source:** English Wikipedia dump. *Why: realistic document lengths, recognizable, and tens of GB of text, far more than needed.*
+- **Preprocessing, done once:** strip wiki markup, lowercase, remove punctuation. Keep stopwords; no stemming or lemmatization. A token is a space-separated string.
+- **Format:** one document per line, tokens separated by single spaces, UTF-8. The document ID is the line number, starting at 0. *Why: trivial to parse even in C; implementations make no decisions about text.*
+
+```
+the cat sat on the mat
+the dog chased the cat
+```
+
+### Corpus sizes
+
+- Sizes are **prefixes** of the same corpus (the first 256 MB, 512 MB, …), doubled by **token count**, not bytes or documents. *Why: same kind of text at every size; tokens measure the actual work, while document lengths vary widely.*
+- Vocabulary grows slower than text (Heaps' law): twice the text gives fewer than twice the distinct terms. Accepted and noted in the report.
+- Weak-scaling sizes are multiples of a base unit (about 256 MB at 1 worker, to be confirmed).
+
+### Postings
+
+Every variant stores the same posting content and delivers the same final order. *Why: if one variant does less work, the comparison is meaningless.*
+
+- A posting = **document ID + term frequency.** *Why: frequency is what real engines need; positions add complexity without concurrency interest.*
+- Posting lists are **sorted by document ID** at the end. Any sorting cost counts in `finalize_ns`.
+
+### Queries
+
+- One query per line, operator in capitals first:
+
+```
+SIMPLE cat
+AND cat dog
+OR mat dog
+```
+
+- *Why: terms are always lowercase, so an uppercase word can only be an operator.*
+- **Generation:** terms are drawn from the preloaded part of the corpus by picking random word occurrences; the operator is chosen at random; fixed seed. *Why: queries hit real documents; frequent words appear often, as in real searches (picking from the vocabulary would give mostly rare words); every variant gets identical queries.*
+
+## CLI contract
+
+Every variant's `run.sh` accepts the same arguments and produces the same outputs; this contract is the only thing the runner knows about an implementation.
+
+```
+./run.sh --mode <mode> --input <corpus> --threads N --repeat R --warmup W
+         [--queries <file>] [--ops K] [--preload D] [--seed S]
+         [--partitions P] [--batch B] [--queue Q]
+         [--latencies <file>] [--dump <file>]
+```
+
+| Argument | Modes | Meaning |
+| --- | --- | --- |
+| `--mode` | all | `build`, `query`, `mixed-95-5`, `mixed-50-50`, `mixed-20-80` |
+| `--input` | all | corpus file, one document per line |
+| `--threads` | all | number of workers N |
+| `--repeat` | all | measured repetitions |
+| `--warmup` | all | warm-up repetitions run first; recorded and flagged, never discarded |
+| `--queries` | query, mixed | query file |
+| `--ops` | query, mixed | total operations in the run; the runner computes it (fixed for strong scaling, per-worker × N for weak), so implementations never know which |
+| `--preload` | mixed | documents indexed before timing starts |
+| `--seed` | query, mixed | base seed; each worker derives its own |
+| `--partitions`, `--batch`, `--queue` | if in `uses` | numeric parameters |
+| `--latencies` | query, mixed | file for raw per-query latencies, written after timing |
+| `--dump` | optional | canonical index dump (section Correctness) |
+
+**Conventions**
+
+- Long argument names only; unknown arguments are errors. *Why: a typo fails loudly instead of being silently ignored.*
+- **stdout:** TSV only (section Results). **stderr:** logs, progress, debug; saved by the runner, never parsed. *Why: a stray print can never corrupt the results.*
+- **Exit code:** 0 on success, non-zero on failure; the runner records failures and continues.
+- Repetitions run inside one process. *Why: Java's JIT needs warm-up within the same process.*
+
+## Results
+
+Results are raw TSV, one row per repetition: the implementation reports what it measured, the runner adds the context, and Python derives everything else later.
+
+**Principles**
+
+- **TSV everywhere, no extra dependencies.** New columns are only ever added at the end. *Why: easy to write in C and read in bash; old files stay readable.*
+- **Raw values only, one row per repetition;** warm-ups kept with `warmup=1`. *Why: averages and ratios can be recomputed from raw data, never the reverse; the JIT effect stays visible.*
+- **Integers, nanoseconds and bytes.** *Why: no floats and no unit confusion between languages.*
+- **The header is built dynamically:** the runner takes the union of all keys in all `dimensions.tsv` files. *Why: a new dimension shows up as a column automatically.*
+
+### Context columns (written by the runner)
+
+`timestamp` · `commit` · `host` · `cpu` · `cores` · `language` · `variant` · one column per dimension key · one column per numeric parameter (`mode`, `corpus`, `threads`, `scaling`, `partitions`, `batch`, `queue`, `pinning`, …) · build settings (compiler/JVM version and flags)
+
+*Why: each language prints only a few fields; metadata is consistent because one program writes it.*
+
+### Measurement columns (written by the implementation to stdout)
+
+| Column | Unit | Meaning |
+| --- | --- | --- |
+| `rep` | — | repetition index |
+| `warmup` | 0/1 | warm-up flag |
+| `load_ns` | ns | reading the input |
+| `preload_ns` | ns | preloading (mixed modes) |
+| `build_ns` | ns | building the index concurrently (build and query modes) |
+| `run_ns` | ns | the query or mixed phase |
+| `finalize_ns` | ns | sorting, merging, publishing at the end |
+| `ops_query`, `ops_insert` | count | operations performed |
+| `docs`, `terms`, `postings` | count | index size; also a sanity check |
+| `peak_rss_bytes` | bytes | peak process memory |
+| `cpu_user_ns`, `cpu_sys_ns` | ns | CPU time during the repetition |
+| `ctx_vol`, `ctx_invol` | count | voluntary / involuntary context switches during the repetition |
+
+Columns that do not apply to a mode are `0`. Phases are separate so that loading can never hide the concurrent part.
+
+### Memory semantics
+
+`peak_rss_bytes` is the **process-wide peak**, so it never decreases across repetitions. Memory analysis uses the first measured repetition. *Why: simple, and garbage not yet collected by Java or Go is a real property of those runtimes, worth showing.* CPU time and context switches are before/after differences around each repetition, so they are exact per repetition.
+
+### Query latencies
+
+Each query's latency is recorded in memory and written to the `--latencies` side file **after** the timer stops. Python computes percentiles (p50, p95, p99, max). *Why: percentiles cannot be combined across repetitions (the average of p99s is not the p99), and writing during timing would disturb it. The cost is disk space, kept in check by sizing `--ops`.*
+
+### Layout
+
+```
+results/<experiment>/<timestamp>/
+  results.tsv          all rows, one per repetition
+  latencies/           raw latency files, one per run
+  logs/                stderr of every run
+  meta.txt             machine, commit, params.sh copy
+```
+
+## Analysis plan
+
+Python reads the final `results.tsv` and the latency files and computes the standard concurrent-performance metrics; nothing below is computed by the implementations. T(p) is the time with p workers.
+
+| Metric | How it is computed | What it reveals |
+| --- | --- | --- |
+| Execution time | `build_ns`, `run_ns`, phases | the raw basis of everything else |
+| Relative speedup | T(1) / T(p), same variant | how well a variant scales |
+| Absolute speedup | T(sequential) / T(p) | whether parallelism actually paid off |
+| Efficiency | speedup / p | how well each worker is used; where it drops is the discussion |
+| Concurrency overhead | variant at p = 1 vs sequential | the cost of synchronization with no contention |
+| Strong scaling | fixed corpus or ops, growing p | speedup curve |
+| Weak scaling | work proportional to p | whether time stays flat as the problem grows |
+| Throughput | postings/s, queries/s, ops/s | comparable across corpus sizes |
+| Serial fraction (Karp–Flatt) | from measured speedup | growing with p means contention or overhead, not inherent serial work |
+| CPU utilization | (user + sys) / (wall × p) | low: workers wait; high with no speedup: workers spin (e.g. CAS retries) |
+| Context switches | `ctx_vol`, `ctx_invol` | voluntary: blocking on locks; involuntary: preemption, oversubscription |
+| Memory | `peak_rss_bytes`, bytes per posting | speed bought with memory |
+| Variability | std. deviation, coefficient of variation | predictability; lock-heavy variants are often less stable |
+| Latency | p50, p95, p99, max from raw latencies | typical and tail query cost (query and mixed modes) |
+
+Plots mark the hardware boundaries (6, 14, 16, 22 workers) so that hardware effects are never mistaken for algorithm effects.
+
+Hardware counters (cache misses, false sharing via `perf`) are out of scope for now: insightful but platform-specific and an extra tool. A possible later deep dive.
+
+## Correctness
+
+Correctness checking is an optional sanity check, not a trusted guarantee: the canonical dump shows whether variants agree, not that they are right.
+
+With `--dump`, a variant writes its final index in one fixed text form, in a separate untimed run: terms sorted, one per line, postings `docid:frequency` sorted by document ID.
+
+```
+cat	0:1 1:1
+chased	1:1
+dog	1:1
+mat	0:1
+on	0:1
+sat	0:1
+the	0:2 1:2
+```
+
+- Two variants that built the same index produce byte-identical files, compared with `cmp`. *Why: internally the variants look completely different; only a canonical form makes them comparable.*
+- It works for `build` and `query` modes, and for the **final index** of mixed modes: with fixed seeds, the set of inserted documents is deterministic.
+- It is the only check that would catch a variant that is fast because it loses updates, the typical race-condition bug. Worth running at least once per variant before trusting its numbers.
+- Query results during mixed runs depend on timing and are not compared. Visibility checks (no half-indexed document seen) belong to the variant design.
+
+## Benchmark runner
+
+`bench/run.sh` is a pure bash script that discovers variants from the filesystem, sweeps the parameters in a params file, and collects one `results.tsv` per experiment.
+
+```
+./bench/run.sh bench/params.sh          full measurements
+./bench/run.sh bench/params-quick.sh    small sweep for development
+```
+
+**What it does, in order**
+
+1. `source` the params file.
+2. Discover variants: every `impl/*/*/` folder not starting with `_`.
+3. Read every `dimensions.tsv`; build the TSV header from the union of keys.
+4. Run each variant's `build.sh`; a failed build is logged and the variant skipped.
+5. Build the list of runs: variant × mode (from `modes`) × corpus × threads × the parameters in `uses` × pinning × scaling. Compute `--ops` for each.
+6. **Shuffle the list.** *Why: a laptop heats up over a session; random order keeps throttling from always hitting the same variant.*
+7. For each run: optional cool-down pause, then `run.sh` under `timeout`, prefixed with `taskset` when pinned. Prepend context columns to each stdout row and append to `results.tsv`; save stderr to `logs/`.
+8. A non-zero exit or a timeout is recorded as a failed run, and the runner continues.
+
+**Rules**
+
+- **Timeouts are generous:** 30 minutes per run to start, tightened later to several times the slowest normal run. *Why: a deadlock would otherwise hang an overnight run forever; standard `timeout` adds no dependency.*
+- **Build and runtime settings are fixed and recorded:** compiler optimization flags in `build.sh`, JVM heap (`-Xmx`) and GC flags in `run.sh`, `GOMAXPROCS` set explicitly. *Why: fairness depends on how code is compiled and run, not just on the code.*
+- **No dependencies beyond bash and standard Linux tools** (`timeout`, `taskset`, `shuf`).
+
+## Hardware and methodology
+
+The benchmark machine is a laptop with a hybrid CPU, so the design separates hardware effects from algorithm effects explicitly.
+
+### Machine
+
+Lenovo IdeaPad Slim, Intel Core Ultra 7 155H, 31 GB RAM, Linux.
+
+| Core type | Cores | Threads | Speed |
+| --- | --- | --- | --- |
+| P-cores (performance) | 6 | 12 (hyperthreading) | fast |
+| E-cores (efficiency) | 8 | 8 | slower |
+| LP E-cores (low power) | 2 | 2 | slowest |
+| **Total** | **16** | **22** | |
+
+Adding a worker does not add a fixed amount of compute: speedup curves bend where a core type runs out. The exact CPU numbers of each type are still to be read from `/sys/devices/cpu_core/cpus` and `/sys/devices/cpu_atom/cpus`.
+
+### Thread values
+
+- Strong scaling: `1 2 4 6 8 12 14 16 22`. *Why: includes the hardware boundaries, which are marked on every plot.*
+- Weak scaling: `1 2 4 8 16`. *Why: doubling, to match the corpus doubling.*
+
+### Pinning
+
+- **Main experiment unpinned:** the OS schedules freely, as real software runs.
+- **Control experiment pinned to P-cores** (`taskset`). *Why: if the bend at 6 workers disappears when pinned, it is proven to be the hardware, not contention. Turns a guess into evidence.*
+
+### Memory budget
+
+- About **20 GB** for the benchmark; **swap must never be used.** *Why: swapping would dominate the measurements.*
+- Estimated index memory: about 1.5× the text size for compact C arrays, up to about 5× for Java or linked lists. The worst variant sets the limit.
+- Largest corpus prefix ≈ **4 GB** of text; weak-scaling base ≈ **256 MB** (≈ 40–50 million tokens). Estimates, to be confirmed with the first measured bytes per posting.
+- Mixed modes need enough documents after the preloaded part for all inserts; sized together with `--ops`.
+
+### Run conditions
+
+- Plugged in, performance power profile, other programs closed.
+- Cool-down pauses between runs and randomized run order. *Why: thin laptops throttle when hot.*
+- Per-repetition rows make throttling visible as variability.
+
+## Open items
+
+The shared design is complete; what remains are the variant designs and numbers that need the first measurements.
+
+- [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
+- [ ] Visibility check for mixed modes (what a query may observe).
+- [ ] Preprocessing details: tool for stripping wiki markup, exact punctuation rules, prefix cutting, query generator.
+- [ ] Read the P-core and E-core CPU numbers for pinning.
+- [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
+- [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.
+- [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
+- [ ] Tighten `TIMEOUT` after the first full runs.
