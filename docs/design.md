@@ -113,13 +113,17 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | Parameter | Meaning | Example values |
 | --- | --- | --- |
 | `MODES` | workload mode | build query mixed-95-5 mixed-50-50 mixed-20-80 |
-| `THREADS` | number of workers N | 1 2 4 6 8 12 14 16 22 |
-| `CORPORA` | corpus prefixes | 256 MB · 512 MB · … · 4 GB of text |
+| `THREADS`, `THREADS_WEAK` | number of workers N (strong / weak scaling) | 1 2 4 6 8 12 14 16 22 / 1 2 4 8 16 |
+| `CORPUS_BASE_MB`, `CORPORA_MB` | corpus prefixes in MB of text; weak scaling uses base × N | 256 · 512 · … · 4096 |
 | `SCALING` | how total work is set | strong · weak |
 | `PARTITIONS` | partitions, if used | 4 16 64 |
 | `BATCH` | postings per lock or message, if used | 1 64 1024 |
 | `QUEUE` | queue capacity, if used | to be sized |
-| `PINNING` | CPU placement | none · pcores |
+| `PINNING`, `PCORES_CPUS` | CPU placement; CPUs used by `pcores` | none · pcores; 0-11 |
+| `OPS_TOTAL`, `OPS_PER_WORKER` | operations in a run: strong / weak | to be sized |
+| `PRELOAD_DOCS`, `SEED` | documents preloaded in mixed modes; base seed | to be sized; 42 |
+| `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle | 10; 1 |
+| `EXPERIMENT` | name of the results folder | full · quick |
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
 | `TIMEOUT` | limit per run | 30 min to start |
 
@@ -389,7 +393,7 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
 - [ ] Visibility check for mixed modes (what a query may observe).
 - [ ] Preprocessing details: tool for stripping wiki markup, exact punctuation rules, prefix cutting, query generator.
-- [ ] Read the P-core and E-core CPU numbers for pinning.
+- [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
 - [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
