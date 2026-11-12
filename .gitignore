@@ -1,0 +1,26 @@
+# Generated data: corpus prefixes, query files, raw Wikipedia dumps (data/raw/)
+data/*
+!data/.gitkeep
+
+# Build outputs: every build.sh writes into impl/<lang>/<variant>/build/
+build/
+
+# Results: final experiments are committed, except the raw latency files (large)
+# and quick/dev runs (experiment folders named quick or dev)
+results/quick/
+results/dev/
+results/*/*/latencies/
+
+# Python
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json

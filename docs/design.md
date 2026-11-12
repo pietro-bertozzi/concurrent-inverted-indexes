@@ -72,6 +72,7 @@ analysis/           Python notebooks and scripts (later)
 3. Every variant has two executable entry points with fixed names: `build.sh` (compile this variant) and `run.sh` (start it with the CLI contract). *Why: language-specific knowledge stays in the language folder; the runner calls the same two commands for every language.*
 4. Every variant has a `dimensions.tsv` describing itself (section Dimensions). *Why: the description lives next to the code it describes.*
 5. Every language has a `sequential` variant. *Why: the baseline for absolute speedup and concurrency overhead.*
+6. `build.sh` writes all its outputs into `build/` inside the variant folder, and `run.sh` runs from there. *Why: one ignore rule covers every language, and nothing generated ever mixes with source.*
 
 ## Dimensions
 
