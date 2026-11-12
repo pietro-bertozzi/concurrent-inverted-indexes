@@ -46,11 +46,12 @@ later, against the real implementations.
 
 ## How I want to work
 
-- One small step at a time. For anything beyond a few lines, show a short plan first.
-- Explain non-obvious code in a sentence or two. I must understand everything that goes in.
-- After each completed step, stage only the files of that step, commit with a clear message (what and why), and push.
+- Implement everything that is already decided in `docs/design.md` without stopping between
+  steps. No plan approval needed.
+- Stop and ask only when something is not decided in the design, or would change it.
+- After each completed step, stage only the files of that step, commit with a clear message
+  (what and why), and push.
 - Don't touch files outside the current step.
-- If you're unsure what I want, ask instead of guessing.
 
 ## Machine
 
