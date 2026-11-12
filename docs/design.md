@@ -394,3 +394,4 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
 - [ ] Tighten `TIMEOUT` after the first full runs.
+- [ ] Decide how `results/<experiment>` folders are named (proposal: each params file sets `EXPERIMENT`, e.g. `EXPERIMENT=quick` in `params-quick.sh`, so dev results land in ignored folders).

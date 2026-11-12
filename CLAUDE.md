@@ -48,7 +48,7 @@ later, against the real implementations.
 
 - One small step at a time. For anything beyond a few lines, show a short plan first.
 - Explain non-obvious code in a sentence or two. I must understand everything that goes in.
-- Don't commit. When a step is done, suggest a commit message; I commit myself.
+- After each completed step, stage only the files of that step, commit with a clear message (what and why), and push.
 - Don't touch files outside the current step.
 - If you're unsure what I want, ask instead of guessing.
 
