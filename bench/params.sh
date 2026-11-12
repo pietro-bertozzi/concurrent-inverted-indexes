@@ -40,6 +40,9 @@ OPS_PER_WORKER=100000
 # Documents indexed before timing starts (mixed modes). Placeholder, to be sized.
 PRELOAD_DOCS=50000
 
+# Number of queries in data/queries.txt (corpus/make-queries.sh). Placeholder, to be sized.
+QUERY_COUNT=100000
+
 # Base seed for query selection; each worker derives its own.
 SEED=42
 

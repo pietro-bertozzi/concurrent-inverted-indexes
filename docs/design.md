@@ -121,7 +121,7 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | `QUEUE` | queue capacity, if used | to be sized |
 | `PINNING`, `PCORES_CPUS` | CPU placement; CPUs used by `pcores` | none · pcores; 0-11 |
 | `OPS_TOTAL`, `OPS_PER_WORKER` | operations in a run: strong / weak | to be sized |
-| `PRELOAD_DOCS`, `SEED` | documents preloaded in mixed modes; base seed | to be sized; 42 |
+| `PRELOAD_DOCS`, `QUERY_COUNT`, `SEED` | documents preloaded in mixed modes; lines in the query file; base seed | to be sized; to be sized; 42 |
 | `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle | 10; 1 |
 | `EXPERIMENT` | name of the results folder | full · quick |
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
