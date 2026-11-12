@@ -1,0 +1,7 @@
+SIMPLE cat
+AND cat dog
+OR mat dog
+SIMPLE bird
+AND the sat
+OR end mat
+AND dog bird
