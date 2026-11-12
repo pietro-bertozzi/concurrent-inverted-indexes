@@ -396,7 +396,7 @@ The shared design is complete; what remains are the variant designs and numbers 
 
 - [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
 - [ ] Visibility check for mixed modes (what a query may observe).
-- [ ] Preprocessing details: tool for stripping wiki markup, exact punctuation rules, prefix cutting, query generator.
+- [ ] Preprocessing details: the tool for stripping wiki markup is still open (`corpus/normalize.sh` starts from plain text, one document per line). Implemented: punctuation rule (every run of non-letter, non-digit characters becomes one space, so `don't` gives `don t`), prefix cutting (`corpus/make-prefixes.sh`), query generator (`corpus/make-queries.sh`).
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
 - [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.

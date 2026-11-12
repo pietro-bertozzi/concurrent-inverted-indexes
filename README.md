@@ -22,16 +22,31 @@ docs/        design document
 
 ## Usage
 
-Not available yet (the runner is step 3 of the infrastructure phase):
+Prepare the data once (the wiki-markup stripping step is not decided yet, see
+`docs/design.md`, Open items; the scripts below start from plain text, one document per line):
+
+```
+corpus/normalize.sh < plain.txt > data/raw/corpus.txt
+corpus/make-prefixes.sh bench/params.sh data/raw/corpus.txt      # data/corpus-<MB>mb.txt
+corpus/make-queries.sh bench/params.sh data/corpus-256mb.txt     # data/queries.txt
+```
+
+Run the benchmark:
 
 ```
 ./bench/run.sh bench/params.sh          full measurements
 ./bench/run.sh bench/params-quick.sh    small sweep for development
 ```
 
+Results land in `results/<experiment>/<timestamp>/` (`results.tsv`, `failures.tsv`,
+`logs/`, `latencies/`, `meta.txt`). Hand-made test data (tiny corpus, queries and the
+expected canonical dump) is in `data/tiny/`.
+
 ## Status
 
-Infrastructure phase: repository skeleton done; no index implementations yet.
+Infrastructure phase: skeleton, parameters, runner, test data and preprocessing scripts are
+done; there are no index implementations yet. The runner has been tested only against
+throwaway fake variants.
 
 ## License
 
