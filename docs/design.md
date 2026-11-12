@@ -216,7 +216,7 @@ Every variant's `run.sh` accepts the same arguments and produces the same output
 **Conventions**
 
 - Long argument names only; unknown arguments are errors. *Why: a typo fails loudly instead of being silently ignored.*
-- **stdout:** TSV only (section Results). **stderr:** logs, progress, debug; saved by the runner, never parsed. *Why: a stray print can never corrupt the results.*
+- **stdout:** TSV data rows only, no header, one row per repetition (warm-ups included), with the measurement columns in the fixed order of section Results; the runner owns the header and treats a wrong row count or field count as a failed run. **stdout** is never anything else (section Results). **stderr:** logs, progress, debug; saved by the runner, never parsed. *Why: a stray print can never corrupt the results.*
 - **Exit code:** 0 on success, non-zero on failure; the runner records failures and continues.
 - Repetitions run inside one process. *Why: Java's JIT needs warm-up within the same process.*
 
@@ -233,7 +233,9 @@ Results are raw TSV, one row per repetition: the implementation reports what it 
 
 ### Context columns (written by the runner)
 
-`timestamp` · `commit` · `host` · `cpu` · `cores` · `language` · `variant` · one column per dimension key · one column per numeric parameter (`mode`, `corpus`, `threads`, `scaling`, `partitions`, `batch`, `queue`, `pinning`, …) · build settings (compiler/JVM version and flags)
+`timestamp` · `commit` · `host` · `cpu` · `cores` · `language` · `variant` · one column per dimension key (sorted) · one column per numeric parameter (`mode`, `corpus`, `threads`, `scaling`, `partitions`, `batch`, `queue`, `pinning`, `ops`, `preload`, `seed`) · `build_settings` (compiler/JVM version and flags) · `run` (run number, which names the log and latency files). Parameters that do not apply to a run are `-`.
+
+`build_settings` comes from the first line of `build/settings.txt`, which `build.sh` may write (`-` if absent).
 
 *Why: each language prints only a few fields; metadata is consistent because one program writes it.*
 
@@ -270,7 +272,9 @@ Each query's latency is recorded in memory and written to the `--latencies` side
 results/<experiment>/<timestamp>/
   results.tsv          all rows, one per repetition
   latencies/           raw latency files, one per run
-  logs/                stderr of every run
+  failures.tsv         failed builds and runs: run, phase, status, and the run's parameters
+  logs/                stderr of every run (<run>.log), build output (build-*.log)
+  runlist.tsv          the shuffled list of runs, in execution order
   meta.txt             machine, commit, params.sh copy
 ```
 
@@ -338,7 +342,7 @@ the	0:2 1:2
 5. Build the list of runs: variant × mode (from `modes`) × corpus × threads × the parameters in `uses` × pinning × scaling. Compute `--ops` for each.
 6. **Shuffle the list.** *Why: a laptop heats up over a session; random order keeps throttling from always hitting the same variant.*
 7. For each run: optional cool-down pause, then `run.sh` under `timeout`, prefixed with `taskset` when pinned. Prepend context columns to each stdout row and append to `results.tsv`; save stderr to `logs/`.
-8. A non-zero exit or a timeout is recorded as a failed run, and the runner continues.
+8. A non-zero exit, a timeout or malformed output is recorded in `failures.tsv` as a failed run, and the runner continues. When pinned to P-cores, runs with more workers than P-core threads are skipped.
 
 **Rules**
 
@@ -398,4 +402,4 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
 - [ ] Tighten `TIMEOUT` after the first full runs.
-- [ ] Decide how `results/<experiment>` folders are named (proposal: each params file sets `EXPERIMENT`, e.g. `EXPERIMENT=quick` in `params-quick.sh`, so dev results land in ignored folders).
+- [x] Decide how `results/<experiment>` folders are named: each params file sets `EXPERIMENT` (`full`, `quick`), so dev results land in ignored folders.
