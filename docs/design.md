@@ -154,6 +154,8 @@ All implementations read the same preprocessed English Wikipedia, so text handli
 
 - **Source:** English Wikipedia dump. *Why: realistic document lengths, recognizable, and tens of GB of text, far more than needed.*
 - **Preprocessing, done once:** strip wiki markup, lowercase, remove punctuation. Keep stopwords; no stemming or lemmatization. A token is a space-separated string.
+- **Tokenization rule** (`corpus/normalize.sh`): every run of characters that are not letters or digits (any script) becomes one space, so `don't` gives `don t`. Combining marks are not letters, so words in scripts that use them are split (Devanagari `हिन्दी` becomes `हिन दी`); accepted, because it is negligible on English Wikipedia and, since the corpus is built once, identical for every language.
+- **Dropped lines:** a line with invalid UTF-8, or with no tokens left after normalization, is dropped, so the document ID is the line number of the *output*. Nothing is dropped silently: `normalize.sh` prints the number of kept and dropped lines to stderr.
 - **Format:** one document per line, tokens separated by single spaces, UTF-8. The document ID is the line number, starting at 0. *Why: trivial to parse even in C; implementations make no decisions about text.*
 
 ```
@@ -396,7 +398,7 @@ The shared design is complete; what remains are the variant designs and numbers 
 
 - [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
 - [ ] Visibility check for mixed modes (what a query may observe).
-- [ ] Preprocessing details: the tool for stripping wiki markup is still open (`corpus/normalize.sh` starts from plain text, one document per line). Implemented: punctuation rule (every run of non-letter, non-digit characters becomes one space, so `don't` gives `don t`), prefix cutting (`corpus/make-prefixes.sh`), query generator (`corpus/make-queries.sh`).
+- [ ] Preprocessing details: the tool for stripping wiki markup is still open (`corpus/normalize.sh` starts from plain text, one document per line). Implemented: tokenization rule and dropped-line counts (section Corpus), prefix cutting (`corpus/make-prefixes.sh`), query generator (`corpus/make-queries.sh`).
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
 - [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.
