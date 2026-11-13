@@ -18,6 +18,8 @@ MEASURE_COLS=(rep warmup load_ns preload_ns build_ns run_ns finalize_ns ops_quer
 HEAD_COLS=(timestamp commit host cpu cpu_cores cpu_logical language variant)
 PARAM_COLS=(mode corpus_mb threads scaling partitions batch queue pinning ops preload seed)
 TAIL_COLS=(build_settings run)
+# Column added by the runner after the measurement columns (new columns go at the end).
+LAST_COLS=(work_n)
 
 # Keys of dimensions.tsv that are instructions to the runner, not dimensions: they are
 # never result columns.
@@ -108,7 +110,7 @@ discover_variants() {
 # a dimension key equal to a result column name is an error.
 read_dimensions() {
     local id key value line_no
-    local -a all_keys=() reserved=("${HEAD_COLS[@]}" "${PARAM_COLS[@]}" "${TAIL_COLS[@]}" "${MEASURE_COLS[@]}")
+    local -a all_keys=() reserved=("${HEAD_COLS[@]}" "${PARAM_COLS[@]}" "${TAIL_COLS[@]}" "${MEASURE_COLS[@]}" "${LAST_COLS[@]}")
     for id in "${VARIANTS[@]}"; do
         line_no=0
         while IFS=$'\t' read -r key value || [[ -n "$key" ]]; do

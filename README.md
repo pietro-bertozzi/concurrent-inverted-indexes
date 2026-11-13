@@ -56,7 +56,10 @@ Before the sweep the runner checks that the data files exist and that the mixed 
 in the corpus (`QUERY_CORPUS_MB`); it records power source, swap and CPU profile in
 `meta.txt` and warns on battery power or swap use. It also warns if a language has no
 `sequential` variant. Runs that differ only in scaling run once, with `scaling` =
-`strong,weak`. The run order is shuffled with `SHUFFLE_SEED`.
+`strong,weak`. In weak scaling a variant whose `max_threads` is below N still runs the work
+of N with `max_threads` workers; the last column of `results.tsv`, `work_n`, records which
+N's work a run did (it equals `threads` in every other run). The run order is shuffled with
+`SHUFFLE_SEED`.
 
 Results land in `results/<experiment>/<timestamp>/` (`results.tsv`, `failures.tsv`,
 `runlist.tsv`, `logs/`, `latencies/`, `meta.txt`). Hand-made test data (tiny corpus, queries and the

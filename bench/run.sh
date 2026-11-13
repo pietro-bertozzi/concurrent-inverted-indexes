@@ -99,19 +99,19 @@ load_params() {
 
 # Prints one row of failures.tsv (columns as in results.tsv, see make_result_dir):
 #   run phase reason status language variant mode corpus_mb threads scaling partitions batch
-#   queue pinning ops preload
+#   queue pinning ops preload work_n
 # Arguments: run phase reason status, then a run-list entry (variant mode scaling corpus_mb
-# threads partitions batch queue pinning ops preload), or just the variant id.
+# threads work_n partitions batch queue pinning ops preload), or just the variant id.
 failure_row() {
     local run="$1" phase="$2" reason="$3" status="$4" id="$5"
     shift 5
-    if [[ $# -eq 10 ]]; then
-        local mode="$1" scaling="$2" mb="$3" threads="$4"
-        shift 4
+    if [[ $# -eq 11 ]]; then
+        local mode="$1" scaling="$2" mb="$3" threads="$4" work_n="$5"
+        shift 5
         join_tabs "$run" "$phase" "$reason" "$status" "${id%%/*}" "${id#*/}" "$mode" "$mb" \
-            "$threads" "$scaling" "$@"
+            "$threads" "$scaling" "$@" "$work_n"
     else
-        join_tabs "$run" "$phase" "$reason" "$status" "${id%%/*}" "${id#*/}" - - - - - - - - - -
+        join_tabs "$run" "$phase" "$reason" "$status" "${id%%/*}" "${id#*/}" - - - - - - - - - - -
     fi
 }
 
@@ -120,8 +120,8 @@ make_result_dir() {
     RESULT="$ROOT/results/$EXPERIMENT/$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$RESULT/logs" "$RESULT/latencies"
     join_tabs "${HEAD_COLS[@]}" "${DIM_KEYS[@]}" "${PARAM_COLS[@]}" "${TAIL_COLS[@]}" \
-        "${MEASURE_COLS[@]}" > "$RESULT/results.tsv"
-    join_tabs run phase reason status language variant "${PARAM_COLS[@]:0:10}" \
+        "${MEASURE_COLS[@]}" "${LAST_COLS[@]}" > "$RESULT/results.tsv"
+    join_tabs run phase reason status language variant "${PARAM_COLS[@]:0:10}" "${LAST_COLS[@]}" \
         > "$RESULT/failures.tsv"
 }
 
@@ -270,14 +270,18 @@ build_all() {
 }
 
 # Prints, one per line, the runs of one variant and mode as tab-separated fields:
-#   variant mode scaling corpus_mb threads partitions batch queue pinning ops preload
-# The runs are the cross product of scaling x threads x corpus x the parameters in
-# `uses` x pinning (runs that differ only in scaling are merged later, by merge_duplicates). Thread values above the variant's max_threads are left out. Build
+#   variant mode scaling corpus_mb threads work_n partitions batch queue pinning ops preload
+# The runs are the cross product of scaling x worker counts x corpus x the parameters in
+# `uses` x pinning (runs that differ only in scaling are merged later, by merge_duplicates).
+# work_n is the N whose work the run does. In strong scaling, thread values above the
+# variant's max_threads are left out and work_n = threads. In weak scaling a variant with
+# max_threads < N still does the work of N (same corpus or --ops as the N-worker run) with
+# max_threads workers, so work_n = N > threads. Build
 # scales the corpus (all CORPORA_MB in strong scaling, CORPUS_BASE_MB x N in weak); query
 # and mixed modes use the one corpus QUERY_CORPUS_MB and scale the operations. "-" marks a
 # field that does not apply.
 runs_for() {
-    local id="$1" mode="$2" kind scaling n mb p b q pin ops preload
+    local id="$1" mode="$2" kind scaling n workers mb p b q pin ops preload
     local -a threads corpora parts batches queues
     local uses="${DIM[$id|uses]}" max_threads="${DIM[$id|max_threads]:-0}" pcores_count
     kind="$(mode_kind "$mode")"
@@ -290,7 +294,11 @@ runs_for() {
         if [[ "$scaling" == strong ]]; then read -ra threads <<<"$THREADS"
         else read -ra threads <<<"$THREADS_WEAK"; fi
         for n in "${threads[@]}"; do
-            if (( max_threads > 0 && n > max_threads )); then continue; fi
+            workers="$n"
+            if (( max_threads > 0 && n > max_threads )); then
+                if [[ "$scaling" == strong ]]; then continue; fi
+                workers="$max_threads"
+            fi
             if [[ "$kind" != build ]]; then
                 corpora=("$QUERY_CORPUS_MB")
             elif [[ "$scaling" == weak ]]; then
@@ -307,8 +315,8 @@ runs_for() {
             for mb in "${corpora[@]}"; do
             for p in "${parts[@]}"; do for b in "${batches[@]}"; do for q in "${queues[@]}"; do
             for pin in $PINNING; do
-                if [[ "$pin" == pcores && "$n" -gt "$pcores_count" ]]; then continue; fi
-                join_tabs "$id" "$mode" "$scaling" "$mb" "$n" "$p" "$b" "$q" "$pin" \
+                if [[ "$pin" == pcores && "$workers" -gt "$pcores_count" ]]; then continue; fi
+                join_tabs "$id" "$mode" "$scaling" "$mb" "$workers" "$n" "$p" "$b" "$q" "$pin" \
                     "$ops" "$preload"
             done; done; done; done
             done
@@ -318,15 +326,22 @@ runs_for() {
 
 # Merges runs that would be started with identical arguments: reads the run list on stdin
 # (fields as printed by runs_for) and prints it with each such group once, in the position of
-# its first member, with scaling "strong,weak". The scaling is not an argument of run.sh,
-# so e.g. build at one worker on the base corpus is the same run in strong and weak scaling.
+# its first member, with scaling "strong,weak". Neither the scaling nor work_n is an argument
+# of run.sh, so e.g. build at one worker on the base corpus is the same run in strong and weak
+# scaling, and so is a sequential variant's weak run of N workers' work on the corpus of a
+# strong run. The merged run takes the work_n of its weak member (in a strong run work_n is
+# just the thread count).
 merge_duplicates() {
     awk -F'\t' -v OFS='\t' '
         {
-            rest = $4
-            for (i = 5; i <= NF; i++) rest = rest OFS $i
-            key = $1 SUBSEP $2 SUBSEP rest
-            if (!(key in id)) { order[++n] = key; id[key] = $1; mode[key] = $2; args[key] = rest }
+            tail = $7
+            for (i = 8; i <= NF; i++) tail = tail OFS $i
+            key = $1 SUBSEP $2 SUBSEP $4 SUBSEP $5 SUBSEP tail
+            if (!(key in id)) {
+                order[++n] = key; id[key] = $1; mode[key] = $2; mb[key] = $4
+                threads[key] = $5; work[key] = $6; rest[key] = tail
+            }
+            if ($3 == "weak") work[key] = $6
             seen[key, $3] = 1
         }
         END {
@@ -334,7 +349,7 @@ merge_duplicates() {
                 key = order[j]; scaling = ""
                 if (seen[key, "strong"]) scaling = "strong"
                 if (seen[key, "weak"]) scaling = scaling (scaling == "" ? "" : ",") "weak"
-                print id[key], mode[key], scaling, args[key]
+                print id[key], mode[key], scaling, mb[key], threads[key], work[key], rest[key]
             }
         }'
 }
@@ -360,8 +375,8 @@ shuffle_lines() {
 check_mixed_sizing() {
     local unshuffled="$1" corpus="$DATA/corpus-${QUERY_CORPUS_MB}mb.txt" docs worst
     worst="$(awk -F'\t' '$2 ~ /^mixed-/ {
-                 split($2, m, "-"); need = $11 + int(($10 * m[3] + 99) / 100)
-                 if (need > max) { max = need; line = $2 " ops=" $10 " preload=" $11 } }
+                 split($2, m, "-"); need = $12 + int(($11 * m[3] + 99) / 100)
+                 if (need > max) { max = need; line = $2 " ops=" $11 " preload=" $12 } }
              END { if (max > 0) print max "\t" line }' "$unshuffled")"
     [[ -n "$worst" ]] || return 0
     docs="$(wc -l < "$corpus")"
@@ -408,8 +423,8 @@ make_runlist() {
 # is deleted.
 run_one() {
     local spec="$1" number="$2" total="$3"
-    local id mode scaling mb threads parts batch queue pin ops preload
-    IFS=$'\t' read -r id mode scaling mb threads parts batch queue pin ops preload <<<"$spec"
+    local id mode scaling mb threads work_n parts batch queue pin ops preload
+    IFS=$'\t' read -r id mode scaling mb threads work_n parts batch queue pin ops preload <<<"$spec"
     local run kind lang variant out logfile latfile status=0 context row
     run="$(printf '%04d' "$number")"
     kind="$(mode_kind "$mode")"
@@ -431,7 +446,7 @@ run_one() {
     if [[ "$pin" == pcores ]]; then cmd+=(taskset -c "$PCORES_CPUS"); fi
     cmd+=("$ROOT/impl/$id/run.sh" "${args[@]}")
 
-    log "[$number/$total] $id $mode $scaling ${mb}mb threads=$threads pin=$pin" \
+    log "[$number/$total] $id $mode $scaling ${mb}mb threads=$threads work_n=$work_n pin=$pin" \
         "partitions=$parts batch=$batch queue=$queue"
     if (( COOLDOWN > 0 )); then sleep "$COOLDOWN"; fi
 
@@ -466,7 +481,7 @@ run_one() {
         "$queue" "$pin" "$ops" "$preload" "$([[ "$kind" == build ]] && echo - || echo "$SEED")" \
         "${BUILD_SETTINGS[$id]}" "$run")"
     while IFS= read -r row; do
-        printf '%s\t%s\n' "$context" "$row"
+        printf '%s\t%s\t%s\n' "$context" "$row" "$work_n"
     done < "$out" >> "$RESULT/results.tsv"
     rm -f "$out"
 }

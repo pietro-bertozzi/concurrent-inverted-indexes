@@ -112,7 +112,7 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 - A missing key means "not applicable"; the runner writes `-`. *Why: a new dimension is added only to the variants it concerns, and old files stay valid.*
 - Key/value lines, not one wide row. *Why: adding a dimension never touches existing files.*
 - The runner sweeps only the parameters in `uses` and runs only the modes in `modes`. *Why: no identical repeated runs, no misleading rows.*
-- `max_threads` (optional) is the highest worker count the variant supports; the runner skips larger thread values, in strong and weak scaling. A missing key means no limit. **Sequential variants declare `max_threads 1`**, so they run with one worker on every corpus size (build) or operation count (query, mixed). *Why: sweeping a single-threaded variant over 22 worker counts would repeat identical runs.*
+- `max_threads` (optional) is the highest worker count the variant supports. A missing key means no limit. In strong scaling the runner skips larger thread values. In weak scaling it does not skip them: a variant still runs the work of N (the same corpus or `--ops` as the N-worker run) with `max_threads` workers, and the `work_n` column records N (section Workload model). **Sequential variants declare `max_threads 1`**, so they run on every corpus size and operation count with one worker. *Why: sweeping a single-threaded variant over 22 worker counts in strong scaling would repeat identical runs, while weak scaling needs the one-worker time of every N's work as its baseline.*
 - `uses`, `modes` and `max_threads` are instructions to the runner, not dimensions: they never become result columns. *Why: they describe what to run, not what was run; the result columns already say it (`threads`, `mode`, …).*
 - A dimension key must not have the same name as a result column (`threads`, `mode`, `run`, …); the runner stops with an error naming the file and line. *Why: two columns with one name would make the header ambiguous.*
 
@@ -157,6 +157,7 @@ Every run has N workers, and each worker performs operations according to the mo
 - **Mixed modes preload part of the corpus, untimed.** Inserts then take the next documents in order. *Why: queries on an empty index would be artificially fast.*
 - **Closed loop:** each worker starts its next operation as soon as the previous one ends. *Why: measures maximum capacity, the right question for comparing strategies. Limitation, stated in the report: closed loop understates tail latency under overload (coordinated omission). An open-loop generator was judged too costly for its benefit.*
 - **Strong and weak scaling** in every mode. Strong: fixed total work, more workers. Weak: work proportional to N. *Why: strong scaling shows speedup; weak scaling shows whether larger problems stay manageable.*
+  - **`work_n`:** every weak-scaling point is "the work of N". `work_n` records which N's work a run did; it equals `threads` in all runs except a weak-scaling run of a variant whose `max_threads` is below N, which does the work of N (same corpus or `--ops` as the N-worker run) with `max_threads` workers. *Why: this gives T_seq(work of N) for every weak-scaling point, the baseline of absolute speedup in weak scaling.* A run that merges a strong and a weak run (section Results) carries the `work_n` of its weak member.
   - **Build scales the corpus:** strong scaling runs every size in `CORPORA_MB`; weak scaling runs `CORPUS_BASE_MB` × N.
   - **Query and mixed modes run on one fixed corpus** (`QUERY_CORPUS_MB`) and **scale the operations:** `OPS_TOTAL` in strong scaling, `OPS_PER_WORKER` × N in weak scaling; the runner passes the result as `--ops`. *Why: the work of a query run is the number of operations, and a fixed index keeps what is being queried identical across runs; a second corpus-size axis would multiply the sweep for little insight.*
 - **Operations beyond the query count:** if a run performs more operations than the query file has lines, each worker starts at an offset in the query file derived from the seed and its worker number, and cycles through the file. *Why: reproducible, different slices of the same query distribution per worker, and any `--ops` works with one query file.*
@@ -256,6 +257,7 @@ Results are raw TSV, one row per repetition: the implementation reports what it 
 - `commit` is the short hash, with `-dirty` appended if the working tree had uncommitted changes when the sweep started.
 - `cpu_cores` is the number of physical cores (16 on the benchmark machine) and `cpu_logical` the number of hardware threads (22). *Why: a benchmark about thread counts must not blur the two.*
 - `corpus_mb` is the corpus size in MB, an integer (`failures.tsv` uses the same column names and values).
+- `work_n` is the last column of a row (new columns are added at the end): the N whose work the run did, see Workload model.
 - `scaling` is `strong`, `weak` or `strong,weak`: runs that would be started with identical arguments (for example build at one worker on the base corpus, which is the same run in both scalings) are executed once and carry both labels. *Why: no identical repeated runs. The analysis selects a scaling with a "contains" test.*
 - `build_settings` comes from the first line of `build/settings.txt`, which `build.sh` may write (`-` if absent). The runner deletes an old `build/settings.txt` before each build, so a stale file is never read.
 
@@ -302,7 +304,7 @@ results/<experiment>/<timestamp>/
                        copy of the params file
 ```
 
-`failures.tsv` has the columns `run`, `phase`, `reason`, `status`, then `language`, `variant` and the run's parameters (all of them except `seed`) with the same names and values as in `results.tsv`. `phase` is `discover` (variant skipped), `build` or `run`. `reason` is a short text for `discover` (for example `run.sh missing or not executable`), `build-failed` for `build`, and for runs `exit`, `timeout`, `bad-output` (wrong row or field count) or `bad-latencies`. `status` is the exit code (124 or 137 for a timeout), `-` if there is none. `run` and the parameters are `-` where they do not apply (discover, build). The stdout of a successful run is deleted after its rows have been appended to `results.tsv`; that of a failed run is kept for diagnosis.
+`failures.tsv` has the columns `run`, `phase`, `reason`, `status`, then `language`, `variant` and the run's parameters (all of them except `seed`, and `work_n` last) with the same names and values as in `results.tsv`. `phase` is `discover` (variant skipped), `build` or `run`. `reason` is a short text for `discover` (for example `run.sh missing or not executable`), `build-failed` for `build`, and for runs `exit`, `timeout`, `bad-output` (wrong row or field count) or `bad-latencies`. `status` is the exit code (124 or 137 for a timeout), `-` if there is none. `run` and the parameters are `-` where they do not apply (discover, build). The stdout of a successful run is deleted after its rows have been appended to `results.tsv`; that of a failed run is kept for diagnosis.
 
 `meta.txt` records the preflight state (power source, swap in use, swap pages moved, platform profile, CPU governor and energy preference) before the sweep and again after it, the `SHUFFLE_SEED`, the physical and logical CPU counts, and a copy of the params file.
 
@@ -314,7 +316,7 @@ Python reads the final `results.tsv` and the latency files and computes the stan
 | --- | --- | --- |
 | Execution time | `build_ns`, `run_ns`, phases | the raw basis of everything else |
 | Relative speedup | T(1) / T(p), same variant | how well a variant scales |
-| Absolute speedup | T(sequential) / T(p) | whether parallelism actually paid off |
+| Absolute speedup | T(sequential) / T(p); in weak scaling T_seq of the same work, from the sequential rows with the same `work_n` | whether parallelism actually paid off |
 | Efficiency | speedup / p | how well each worker is used; where it drops is the discussion |
 | Concurrency overhead | variant at p = 1 vs sequential | the cost of synchronization with no contention |
 | Strong scaling | fixed corpus or ops, growing p | speedup curve |
@@ -370,7 +372,7 @@ the	0:2 1:2
 3. Read every `dimensions.tsv`; build the TSV header from the union of the dimension keys. A name collision with a result column stops the runner.
 4. Record the preflight state (power source, swap, CPU profile) in `meta.txt`; warn (do not stop) on battery power.
 5. Run each variant's `build.sh`; a failed build is logged and the variant skipped.
-6. Build the list of runs: variant × mode (from `modes`) × corpus × threads (up to `max_threads`) × the parameters in `uses` × pinning × scaling. Build scales the corpus, query and mixed use `QUERY_CORPUS_MB`. Compute `--ops` for each. Merge runs with identical arguments, which differ only in scaling, into one run with `scaling` `strong,weak`. Check that every data file exists and that the mixed runs fit in the corpus (insert budget); stop with an error if not.
+6. Build the list of runs: variant × mode (from `modes`) × corpus × threads × the parameters in `uses` × pinning × scaling; thread values above `max_threads` are skipped in strong scaling, and become capped runs with `work_n` = N in weak scaling. Build scales the corpus, query and mixed use `QUERY_CORPUS_MB`. Compute `--ops` for each. Merge runs with identical arguments, which differ only in scaling (and `work_n`), into one run with `scaling` `strong,weak`. Check that every data file exists and that the mixed runs fit in the corpus (insert budget); stop with an error if not.
 7. **Shuffle the list**, with a pseudo-random order that depends only on `SHUFFLE_SEED` (a small seeded generator inside `run.sh`; the same params file gives the same order, and the seed is in `meta.txt`). *Why: a laptop heats up over a session; random order keeps throttling from always hitting the same variant. A fixed seed keeps the sweep reproducible.*
 8. For each run: optional cool-down pause, then `run.sh` under `timeout`, prefixed with `taskset` when pinned. Check the output, prepend context columns to each stdout row and append to `results.tsv`; save stderr to `logs/`.
 9. A non-zero exit, a timeout, malformed output or a malformed latency file is recorded in `failures.tsv` as a failed run, and the runner continues. When pinned to P-cores, runs with more workers than P-core threads are skipped.
@@ -433,7 +435,6 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
 - [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized.
 - [ ] Insert budget in mixed modes: how a variant guarantees at most ceil(`--ops` × insert share) inserts although the operation kind is a probability (for example a per-worker pattern or quota instead of random draws, or operation types generated up front from the seed). A fixed insert count would also let `check.sh` check mixed modes.
-- [ ] Baseline for weak scaling: a sequential variant (`max_threads 1`) runs build on every corpus size (strong rows) but query and mixed only with the fixed `OPS_TOTAL` or `OPS_PER_WORKER`; decide how absolute speedup is computed for weak query and mixed runs.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
 - [ ] Tighten `TIMEOUT` after the first full runs.
 - [x] Decide how `results/<experiment>` folders are named: each params file sets `EXPERIMENT` (`full`, `pinned`, `quick`), so dev results land in ignored folders.
