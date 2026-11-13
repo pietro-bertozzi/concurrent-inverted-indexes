@@ -52,6 +52,9 @@ QUERY_COUNT=100000
 # Base seed for query selection; each worker derives its own.
 SEED=42
 
+# Seed of the one-time document shuffle (corpus/shuffle.sh) that precedes the prefix cut.
+CORPUS_SEED=2015
+
 # Repetitions per run: WARMUP extra ones run first and are recorded with warmup=1.
 REPEAT=10
 WARMUP=1

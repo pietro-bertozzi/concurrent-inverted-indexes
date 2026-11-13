@@ -33,6 +33,9 @@ PRELOAD_DOCS=50000
 QUERY_COUNT=100000
 SEED=42
 
+# Seed of the one-time document shuffle (corpus/shuffle.sh) that precedes the prefix cut.
+CORPUS_SEED=2015
+
 REPEAT=10
 WARMUP=1
 TIMEOUT=30m

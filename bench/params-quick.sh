@@ -31,6 +31,9 @@ QUERY_COUNT=1000
 
 SEED=42
 
+# Seed of the one-time document shuffle (corpus/shuffle.sh) that precedes the prefix cut.
+CORPUS_SEED=2015
+
 REPEAT=2
 WARMUP=1
 

@@ -30,7 +30,8 @@ see `docs/design.md`, section Corpus):
 ```
 curl -L -o data/raw/wikipedia.txt.gz https://zenodo.org/api/records/229904/files/wikipedia.txt.gz/content
 md5sum data/raw/wikipedia.txt.gz                                 # c1fefd53b73798459e8623e2b965f75f
-zcat data/raw/wikipedia.txt.gz | corpus/extract.sh | corpus/normalize.sh > data/raw/corpus.txt
+zcat data/raw/wikipedia.txt.gz | corpus/extract.sh | corpus/normalize.sh > data/raw/corpus-dump-order.txt
+corpus/shuffle.sh bench/params.sh < data/raw/corpus-dump-order.txt > data/raw/corpus.txt   # seeded shuffle
 corpus/make-prefixes.sh bench/params.sh data/raw/corpus.txt      # data/corpus-<MB>mb.txt
 corpus/make-queries.sh bench/params.sh data/corpus-256mb.txt     # data/queries.txt
 ```
