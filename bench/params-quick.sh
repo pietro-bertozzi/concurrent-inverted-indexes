@@ -39,3 +39,11 @@ TIMEOUT=2m
 COOLDOWN=0
 
 SHUFFLE_SEED=1
+
+# Correctness check (bench/check.sh): the run shape and the numeric parameters it passes to
+# the variants that use them. Small values: the test corpus has 6 documents.
+CHECK_REPEAT=1
+CHECK_WARMUP=0
+CHECK_PARTITIONS=4
+CHECK_BATCH=2
+CHECK_QUEUE=8

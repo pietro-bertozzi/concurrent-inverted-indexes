@@ -5,7 +5,8 @@
 #
 # Builds every variant, runs it with --dump on the hand-made test data (data/tiny/) in
 # build and query mode (those it declares in `modes`), with every worker count of the params
-# file that its max_threads allows, and compares the dump with data/tiny/expected-dump.tsv
+# file that its max_threads allows (run shape and numeric parameters: the CHECK_* variables of the
+# params file), and compares the dump with data/tiny/expected-dump.tsv
 # using cmp. A variant passes if all its runs produce a byte-identical dump.
 #
 # stdout: one TSV row per variant (variant, result, detail), with a header.
@@ -22,15 +23,15 @@ WORK=""                     # temporary folder for logs and dumps
 cleanup() { [[ -z "$WORK" ]] || rm -rf "$WORK"; }
 
 # Prints the arguments of a run of variant $1 in mode $2 with $3 workers, one per line.
-# Numeric parameters a variant asks for in `uses` take the first value of the params file.
+# Numeric parameters a variant asks for in `uses` take the CHECK_* values of the params file.
 run_args() {
-    local id="$1" mode="$2" threads="$3" first
+    local id="$1" mode="$2" threads="$3"
     echo --mode; echo "$mode"
     echo --input; echo "$TINY/corpus.txt"
     echo --threads; echo "$threads"
-    # One repetition, no warm-up: the dump comes from a separate, untimed run.
-    echo --repeat; echo 1
-    echo --warmup; echo 0
+    # The dump comes from a separate, untimed run: CHECK_REPEAT and CHECK_WARMUP are small.
+    echo --repeat; echo "$CHECK_REPEAT"
+    echo --warmup; echo "$CHECK_WARMUP"
     echo --dump; echo "$WORK/dump.tsv"
     if [[ "$mode" == query ]]; then
         echo --queries; echo "$TINY/queries.txt"
@@ -38,9 +39,9 @@ run_args() {
         echo --seed; echo "$SEED"
         echo --latencies; echo "$WORK/latencies.tsv"
     fi
-    if in_csv partitions "$(dim "$id" uses)"; then first="${PARTITIONS%% *}"; echo --partitions; echo "$first"; fi
-    if in_csv batch "$(dim "$id" uses)"; then first="${BATCH%% *}"; echo --batch; echo "$first"; fi
-    if in_csv queue "$(dim "$id" uses)"; then first="${QUEUE%% *}"; echo --queue; echo "$first"; fi
+    if in_csv partitions "$(dim "$id" uses)"; then echo --partitions; echo "$CHECK_PARTITIONS"; fi
+    if in_csv batch "$(dim "$id" uses)"; then echo --batch; echo "$CHECK_BATCH"; fi
+    if in_csv queue "$(dim "$id" uses)"; then echo --queue; echo "$CHECK_QUEUE"; fi
 }
 
 # Runs variant $1 in mode $2 with $3 workers and compares the dump with the expected one.
@@ -104,9 +105,13 @@ main() {
     done
     # shellcheck source=/dev/null
     source "$params"
-    for file in THREADS PARTITIONS BATCH QUEUE SEED TIMEOUT; do
+    for file in THREADS SEED TIMEOUT CHECK_REPEAT CHECK_WARMUP CHECK_PARTITIONS CHECK_BATCH CHECK_QUEUE; do
         [[ -n "${!file+set}" ]] || die "$params does not define $file"
     done
+    for file in CHECK_REPEAT CHECK_WARMUP CHECK_PARTITIONS CHECK_BATCH CHECK_QUEUE; do
+        [[ "${!file}" =~ ^[0-9]+$ ]] || die "$file must be a non-negative integer, got '${!file}'"
+    done
+    (( CHECK_REPEAT >= 1 )) || die "CHECK_REPEAT must be at least 1"
     discover_variants
     read_dimensions
     WORK="$(mktemp -d)"

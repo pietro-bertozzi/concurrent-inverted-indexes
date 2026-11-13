@@ -133,6 +133,7 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | `PRELOAD_DOCS`, `QUERY_COUNT`, `SEED` | documents preloaded in mixed modes; lines in the query file; base seed | to be sized; to be sized; 42 |
 | `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle (recorded in `meta.txt`) | 10; 1 |
 | `EXPERIMENT` | name of the results folder | full · pinned · quick |
+| `CHECK_REPEAT`, `CHECK_WARMUP`, `CHECK_PARTITIONS`, `CHECK_BATCH`, `CHECK_QUEUE` | run shape and numeric parameters `check.sh` passes to variants (read only by `check.sh`) | 1, 0; 4, 2, 8 |
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
 | `TIMEOUT` | limit per run, as a number with an optional `s`, `m`, `h` or `d` suffix | 30m to start |
 
@@ -347,9 +348,9 @@ the	0:2 1:2
 ```
 
 - Two variants that built the same index produce byte-identical files, compared with `cmp`. *Why: internally the variants look completely different; only a canonical form makes them comparable.*
-- It works for `build` and `query` modes, and for the **final index** of mixed modes: with fixed seeds, the set of inserted documents is deterministic.
+- It works for `build` and `query` modes, and for the **final index** of mixed modes provided the number of inserts is fixed: with fixed seeds, the set of inserted documents is then deterministic (see the open item on the insert budget).
 - It is the only check that would catch a variant that is fast because it loses updates, the typical race-condition bug. Worth running at least once per variant before trusting its numbers.
-- **`bench/check.sh [params-file]`** automates it. It discovers the variants like the runner, builds each, and runs it with `--dump` on the hand-made test data (`data/tiny/`: corpus, queries and `expected-dump.tsv`) in `build` and `query` mode (those the variant declares), once for every worker count in `THREADS` of the params file (default `params-quick.sh`) up to the variant's `max_threads`, one repetition without warm-up each; numeric parameters in `uses` take the first value of the params file. The dump is compared with `cmp`. stdout is a TSV with one row per variant (`variant`, `result` = `PASS` or `FAIL`, `detail`), stderr shows progress, the exit code is 0 only if every variant passed. Mixed modes are not checked: their final index depends on how many inserts happen. *Why: worker counts above the number of documents and above the number of cores are where lost updates and edge cases show up, and the test corpus is small enough to run them all in seconds.*
+- **`bench/check.sh [params-file]`** automates it. It discovers the variants like the runner, builds each, and runs it with `--dump` on the hand-made test data (`data/tiny/`: corpus, queries and `expected-dump.tsv`) in `build` and `query` mode (those the variant declares), once for every worker count in `THREADS` of the params file (default `params-quick.sh`) up to the variant's `max_threads`, `CHECK_REPEAT` repetitions and `CHECK_WARMUP` warm-ups each; numeric parameters in `uses` take the values `CHECK_PARTITIONS`, `CHECK_BATCH` and `CHECK_QUEUE` of the params file (all in the params file, like every numeric parameter). The dump is compared with `cmp`. stdout is a TSV with one row per variant (`variant`, `result` = `PASS` or `FAIL`, `detail`), stderr shows progress, the exit code is 0 only if every variant passed. Mixed modes are not checked yet: their final index depends on how many inserts happen, which is not fixed while the operation kind is a random draw (open item: insert budget). With a fixed number of inserts, for example operation types generated up front from the seed, the final index of a mixed run is deterministic and can be checked too. *Why: worker counts above the number of documents and above the number of cores are where lost updates and edge cases show up, and the test corpus is small enough to run them all in seconds.*
 - Query results during mixed runs depend on timing and are not compared. Visibility checks (no half-indexed document seen) belong to the variant design.
 
 ## Benchmark runner
@@ -431,7 +432,7 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
 - [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized.
-- [ ] Insert budget in mixed modes: how a variant guarantees at most ceil(`--ops` × insert share) inserts although the operation kind is a probability (for example a per-worker pattern or quota instead of random draws).
+- [ ] Insert budget in mixed modes: how a variant guarantees at most ceil(`--ops` × insert share) inserts although the operation kind is a probability (for example a per-worker pattern or quota instead of random draws, or operation types generated up front from the seed). A fixed insert count would also let `check.sh` check mixed modes.
 - [ ] Baseline for weak scaling: a sequential variant (`max_threads 1`) runs build on every corpus size (strong rows) but query and mixed only with the fixed `OPS_TOTAL` or `OPS_PER_WORKER`; decide how absolute speedup is computed for weak query and mixed runs.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
 - [ ] Tighten `TIMEOUT` after the first full runs.

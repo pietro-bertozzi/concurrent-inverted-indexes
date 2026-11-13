@@ -48,6 +48,10 @@ compared with `cmp`; prints one PASS/FAIL row per variant, exit code 0 only if a
 ./bench/check.sh bench/params.sh        worker counts of another params file
 ```
 
+The run shape and the numeric parameters passed to variants by `check.sh` are the `CHECK_*`
+variables of the params file. Mixed modes are not checked yet (see the insert-budget open
+item in `docs/design.md`).
+
 Before the sweep the runner checks that the data files exist and that the mixed modes fit
 in the corpus (`QUERY_CORPUS_MB`); it records power source, swap and CPU profile in
 `meta.txt` and warns on battery power or swap use. It also warns if a language has no
