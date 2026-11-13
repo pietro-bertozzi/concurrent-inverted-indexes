@@ -48,7 +48,9 @@ The filesystem is the registry: the runner discovers every implementation by sca
 ```
 bench/
   run.sh            runner: discovers, builds, sweeps, collects
-  params.sh         numeric parameters (lists of values)
+  params.sh         numeric parameters of the main experiment (lists of values)
+  params-pinned.sh  control experiment pinned to P-cores (smaller sweep)
+  params-quick.sh   small sweep for development
 corpus/             preprocessing scripts (raw Wikipedia → corpus, queries)
 data/               generated corpus prefixes and query files
 impl/
@@ -73,6 +75,7 @@ analysis/           Python notebooks and scripts (later)
 4. Every variant has a `dimensions.tsv` describing itself (section Dimensions). *Why: the description lives next to the code it describes.*
 5. Every language has a `sequential` variant. *Why: the baseline for absolute speedup and concurrency overhead.*
 6. `build.sh` writes all its outputs into `build/` inside the variant folder, and `run.sh` runs from there. *Why: one ignore rule covers every language, and nothing generated ever mixes with source.*
+7. A variant folder without an executable `build.sh`, an executable `run.sh` or a `dimensions.tsv` is skipped with a warning and recorded in `failures.tsv` (phase `discover`), like a failed build. *Why: one half-written variant must not stop an overnight sweep.*
 
 ## Dimensions
 
@@ -107,6 +110,9 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 - A missing key means "not applicable"; the runner writes `-`. *Why: a new dimension is added only to the variants it concerns, and old files stay valid.*
 - Key/value lines, not one wide row. *Why: adding a dimension never touches existing files.*
 - The runner sweeps only the parameters in `uses` and runs only the modes in `modes`. *Why: no identical repeated runs, no misleading rows.*
+- `max_threads` (optional) is the highest worker count the variant supports; the runner skips larger thread values, in strong and weak scaling. A missing key means no limit. **Sequential variants declare `max_threads 1`**, so they run with one worker on every corpus size (build) or operation count (query, mixed). *Why: sweeping a single-threaded variant over 22 worker counts would repeat identical runs.*
+- `uses`, `modes` and `max_threads` are instructions to the runner, not dimensions: they never become result columns. *Why: they describe what to run, not what was run; the result columns already say it (`threads`, `mode`, …).*
+- A dimension key must not have the same name as a result column (`threads`, `mode`, `run`, …); the runner stops with an error naming the file and line. *Why: two columns with one name would make the header ambiguous.*
 
 ### Numeric parameters (`bench/params.sh`)
 
@@ -114,20 +120,23 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | --- | --- | --- |
 | `MODES` | workload mode | build query mixed-95-5 mixed-50-50 mixed-20-80 |
 | `THREADS`, `THREADS_WEAK` | number of workers N (strong / weak scaling) | 1 2 4 6 8 12 14 16 22 / 1 2 4 8 16 |
-| `CORPUS_BASE_MB`, `CORPORA_MB` | corpus prefixes in MB of text; weak scaling uses base × N | 256 · 512 · … · 4096 |
+| `CORPUS_BASE_MB`, `CORPORA_MB` | corpus prefixes in MB of text, scaled by build mode only; weak scaling uses base × N | 256 · 512 · … · 4096 |
+| `QUERY_CORPUS` | the one corpus (MB, one of `CORPORA_MB`) that query and mixed modes run on | 256, to be sized |
 | `SCALING` | how total work is set | strong · weak |
 | `PARTITIONS` | partitions, if used | 4 16 64 |
 | `BATCH` | postings per lock or message, if used | 1 64 1024 |
 | `QUEUE` | queue capacity, if used | to be sized |
-| `PINNING`, `PCORES_CPUS` | CPU placement; CPUs used by `pcores` | none · pcores; 0-11 |
+| `PINNING`, `PCORES_CPUS` | CPU placement (`none` in `params.sh`, `pcores` in `params-pinned.sh`); CPUs used by `pcores` | none · pcores; 0-11 |
 | `OPS_TOTAL`, `OPS_PER_WORKER` | operations in a run: strong / weak | to be sized |
 | `PRELOAD_DOCS`, `QUERY_COUNT`, `SEED` | documents preloaded in mixed modes; lines in the query file; base seed | to be sized; to be sized; 42 |
-| `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle | 10; 1 |
-| `EXPERIMENT` | name of the results folder | full · quick |
+| `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle (recorded in `meta.txt`) | 10; 1 |
+| `EXPERIMENT` | name of the results folder | full · pinned · quick |
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
-| `TIMEOUT` | limit per run | 30 min to start |
+| `TIMEOUT` | limit per run, as a number with an optional `s`, `m`, `h` or `d` suffix | 30m to start |
 
 The file is plain bash, read with `source`. *Why: no parsing and no dependency; every implementation gets exactly the same values from one place.* Language is not a parameter: the folder says it.
+
+There are three params files with the same variable names: `params.sh` (the main, unpinned experiment), `params-pinned.sh` (the pinned control experiment, see Pinning) and `params-quick.sh` (development). The runner validates the file before doing anything: every variable defined, numbers and lists well-formed, `CORPUS_BASE_MB` and `QUERY_CORPUS` listed in `CORPORA_MB`, and, if weak scaling of build is requested, every size base × N listed too.
 
 ## Workload model
 
@@ -144,7 +153,11 @@ Every run has N workers, and each worker performs operations according to the mo
 - **Ratios are per operation, not per thread.** *Why: works at any N, including 1 and odd values; it is the method of the standard YCSB benchmark. Splitting threads into readers and writers breaks at small N.*
 - **Mixed modes preload part of the corpus, untimed.** Inserts then take the next documents in order. *Why: queries on an empty index would be artificially fast.*
 - **Closed loop:** each worker starts its next operation as soon as the previous one ends. *Why: measures maximum capacity, the right question for comparing strategies. Limitation, stated in the report: closed loop understates tail latency under overload (coordinated omission). An open-loop generator was judged too costly for its benefit.*
-- **Strong and weak scaling** in every mode. Strong: fixed total work, more workers. Weak: work proportional to N. *Why: strong scaling shows speedup; weak scaling shows whether larger problems stay manageable.* For build and query, the corpus size sets the work; for mixed modes, the total number of operations does.
+- **Strong and weak scaling** in every mode. Strong: fixed total work, more workers. Weak: work proportional to N. *Why: strong scaling shows speedup; weak scaling shows whether larger problems stay manageable.*
+  - **Build scales the corpus:** strong scaling runs every size in `CORPORA_MB`; weak scaling runs `CORPUS_BASE_MB` × N.
+  - **Query and mixed modes run on one fixed corpus** (`QUERY_CORPUS`) and **scale the operations:** `OPS_TOTAL` in strong scaling, `OPS_PER_WORKER` × N in weak scaling; the runner passes the result as `--ops`. *Why: the work of a query run is the number of operations, and a fixed index keeps what is being queried identical across runs; a second corpus-size axis would multiply the sweep for little insight.*
+- **Operations beyond the query count:** if a run performs more operations than the query file has lines, each worker starts at an offset in the query file derived from the seed and its worker number, and cycles through the file. *Why: reproducible, different slices of the same query distribution per worker, and any `--ops` works with one query file.*
+- **Insert budget:** a mixed run inserts at most ceil(`--ops` × insert share) documents, so preload + budget must not exceed the number of documents of `QUERY_CORPUS`. The runner checks this for every planned mixed run before starting and stops with an error if it fails. *Why: an overnight run must not die in the middle because the corpus ran out.* How a variant guarantees the budget while the operation kind is a probability is part of the variant design (Open items).
 
 ## Data
 
@@ -167,7 +180,7 @@ the dog chased the cat
 
 - Sizes are **prefixes** of the same corpus (the first 256 MB, 512 MB, …), doubled by **token count**, not bytes or documents. *Why: same kind of text at every size; tokens measure the actual work, while document lengths vary widely.*
 - Vocabulary grows slower than text (Heaps' law): twice the text gives fewer than twice the distinct terms. Accepted and noted in the report.
-- Weak-scaling sizes are multiples of a base unit (about 256 MB at 1 worker, to be confirmed).
+- Weak-scaling sizes of build mode are multiples of a base unit (about 256 MB at 1 worker, to be confirmed). Every corpus size the runner uses (`CORPORA_MB`, base × N, `QUERY_CORPUS`) must be a prefix listed in `CORPORA_MB`; `make-prefixes.sh` cuts exactly those.
 
 ### Postings
 
@@ -208,11 +221,11 @@ Every variant's `run.sh` accepts the same arguments and produces the same output
 | `--repeat` | all | measured repetitions |
 | `--warmup` | all | warm-up repetitions run first; recorded and flagged, never discarded |
 | `--queries` | query, mixed | query file |
-| `--ops` | query, mixed | total operations in the run; the runner computes it (fixed for strong scaling, per-worker × N for weak), so implementations never know which |
+| `--ops` | query, mixed | total operations in the run; the runner computes it (fixed for strong scaling, per-worker × N for weak), so implementations never know which; beyond the query count, workers cycle through the query file (Workload model) |
 | `--preload` | mixed | documents indexed before timing starts |
-| `--seed` | query, mixed | base seed; each worker derives its own |
+| `--seed` | query, mixed | base seed; each worker derives its own, and its starting offset in the query file |
 | `--partitions`, `--batch`, `--queue` | if in `uses` | numeric parameters |
-| `--latencies` | query, mixed | file for raw per-query latencies, written after timing |
+| `--latencies` | query, mixed | file for raw per-query latencies, written after timing (format: section Query latencies) |
 | `--dump` | optional | canonical index dump (section Correctness) |
 
 **Conventions**
@@ -231,13 +244,16 @@ Results are raw TSV, one row per repetition: the implementation reports what it 
 - **TSV everywhere, no extra dependencies.** New columns are only ever added at the end. *Why: easy to write in C and read in bash; old files stay readable.*
 - **Raw values only, one row per repetition;** warm-ups kept with `warmup=1`. *Why: averages and ratios can be recomputed from raw data, never the reverse; the JIT effect stays visible.*
 - **Integers, nanoseconds and bytes.** *Why: no floats and no unit confusion between languages.*
-- **The header is built dynamically:** the runner takes the union of all keys in all `dimensions.tsv` files. *Why: a new dimension shows up as a column automatically.*
+- **The header is built dynamically:** the runner takes the union of all dimension keys in all `dimensions.tsv` files (runner keys excluded, section Dimensions). *Why: a new dimension shows up as a column automatically.*
 
 ### Context columns (written by the runner)
 
-`timestamp` · `commit` · `host` · `cpu` · `cores` · `language` · `variant` · one column per dimension key (sorted) · one column per numeric parameter (`mode`, `corpus`, `threads`, `scaling`, `partitions`, `batch`, `queue`, `pinning`, `ops`, `preload`, `seed`) · `build_settings` (compiler/JVM version and flags) · `run` (run number, which names the log and latency files). Parameters that do not apply to a run are `-`.
+`timestamp` · `commit` · `host` · `cpu` · `cpu_cores` · `cpu_logical` · `language` · `variant` · one column per dimension key (sorted) · one column per numeric parameter (`mode`, `corpus_mb`, `threads`, `scaling`, `partitions`, `batch`, `queue`, `pinning`, `ops`, `preload`, `seed`) · `build_settings` (compiler/JVM version and flags) · `run` (run number, which names the log and latency files). Parameters that do not apply to a run are `-`.
 
-`build_settings` comes from the first line of `build/settings.txt`, which `build.sh` may write (`-` if absent).
+- `commit` is the short hash, with `-dirty` appended if the working tree had uncommitted changes when the sweep started.
+- `cpu_cores` is the number of physical cores (16 on the benchmark machine) and `cpu_logical` the number of hardware threads (22). *Why: a benchmark about thread counts must not blur the two.*
+- `corpus_mb` is the corpus size in MB, an integer (`failures.tsv` uses the same column names and values).
+- `build_settings` comes from the first line of `build/settings.txt`, which `build.sh` may write (`-` if absent). The runner deletes an old `build/settings.txt` before each build, so a stale file is never read.
 
 *Why: each language prints only a few fields; metadata is consistent because one program writes it.*
 
@@ -266,7 +282,7 @@ Columns that do not apply to a mode are `0`. Phases are separate so that loading
 
 ### Query latencies
 
-Each query's latency is recorded in memory and written to the `--latencies` side file **after** the timer stops. Python computes percentiles (p50, p95, p99, max). *Why: percentiles cannot be combined across repetitions (the average of p99s is not the p99), and writing during timing would disturb it. The cost is disk space, kept in check by sizing `--ops`.*
+Each query's latency is recorded in memory and written to the `--latencies` side file **after** the timer stops. The file is one TSV per run (`latencies/<run>.tsv`), without header, with the columns `rep`, `warmup`, `latency_ns` (integers, as in the measurement columns): one line per query operation of every repetition, warm-ups included and flagged. After a successful query or mixed run the runner checks that the file exists, is not empty and that every line has this shape; otherwise the run is recorded as failed (reason `bad-latencies`). Python computes percentiles (p50, p95, p99, max). *Why: percentiles cannot be combined across repetitions (the average of p99s is not the p99), and writing during timing would disturb it. The cost is disk space, kept in check by sizing `--ops`.*
 
 ### Layout
 
@@ -274,11 +290,17 @@ Each query's latency is recorded in memory and written to the `--latencies` side
 results/<experiment>/<timestamp>/
   results.tsv          all rows, one per repetition
   latencies/           raw latency files, one per run
-  failures.tsv         failed builds and runs: run, phase, status, and the run's parameters
-  logs/                stderr of every run (<run>.log), build output (build-*.log)
+  failures.tsv         failed builds and runs, skipped variants (see below)
+  logs/                stderr of every run (<run>.log), build output (build-*.log),
+                       stdout of failed runs only (<run>.stdout)
   runlist.tsv          the shuffled list of runs, in execution order
-  meta.txt             machine, commit, params.sh copy
+  meta.txt             machine, commit, shuffle seed, preflight state before and after,
+                       copy of the params file
 ```
+
+`failures.tsv` has the columns `run`, `phase`, `reason`, `status`, then `language`, `variant` and the run's parameters (all of them except `seed`) with the same names and values as in `results.tsv`. `phase` is `discover` (variant skipped), `build` or `run`. `reason` is a short text for `discover` (for example `run.sh missing or not executable`), `build-failed` for `build`, and for runs `exit`, `timeout`, `bad-output` (wrong row or field count) or `bad-latencies`. `status` is the exit code (124 or 137 for a timeout), `-` if there is none. `run` and the parameters are `-` where they do not apply (discover, build). The stdout of a successful run is deleted after its rows have been appended to `results.tsv`; that of a failed run is kept for diagnosis.
+
+`meta.txt` records the preflight state (power source, swap in use, swap pages moved, platform profile, CPU governor and energy preference) before the sweep and again after it, the `SHUFFLE_SEED`, the physical and logical CPU counts, and a copy of the params file.
 
 ## Analysis plan
 
@@ -331,26 +353,29 @@ the	0:2 1:2
 `bench/run.sh` is a pure bash script that discovers variants from the filesystem, sweeps the parameters in a params file, and collects one `results.tsv` per experiment.
 
 ```
-./bench/run.sh bench/params.sh          full measurements
+./bench/run.sh bench/params.sh          main experiment (unpinned)
+./bench/run.sh bench/params-pinned.sh   control experiment pinned to P-cores
 ./bench/run.sh bench/params-quick.sh    small sweep for development
 ```
 
 **What it does, in order**
 
-1. `source` the params file.
-2. Discover variants: every `impl/*/*/` folder not starting with `_`.
-3. Read every `dimensions.tsv`; build the TSV header from the union of keys.
-4. Run each variant's `build.sh`; a failed build is logged and the variant skipped.
-5. Build the list of runs: variant × mode (from `modes`) × corpus × threads × the parameters in `uses` × pinning × scaling. Compute `--ops` for each.
-6. **Shuffle the list.** *Why: a laptop heats up over a session; random order keeps throttling from always hitting the same variant.*
-7. For each run: optional cool-down pause, then `run.sh` under `timeout`, prefixed with `taskset` when pinned. Prepend context columns to each stdout row and append to `results.tsv`; save stderr to `logs/`.
-8. A non-zero exit, a timeout or malformed output is recorded in `failures.tsv` as a failed run, and the runner continues. When pinned to P-cores, runs with more workers than P-core threads are skipped.
+1. `source` the params file and validate it (section Numeric parameters).
+2. Discover variants: every `impl/*/*/` folder not starting with `_`; incomplete ones are skipped with a warning (rule 7).
+3. Read every `dimensions.tsv`; build the TSV header from the union of the dimension keys. A name collision with a result column stops the runner.
+4. Record the preflight state (power source, swap, CPU profile) in `meta.txt`; warn (do not stop) on battery power.
+5. Run each variant's `build.sh`; a failed build is logged and the variant skipped.
+6. Build the list of runs: variant × mode (from `modes`) × corpus × threads (up to `max_threads`) × the parameters in `uses` × pinning × scaling. Build scales the corpus, query and mixed use `QUERY_CORPUS`. Compute `--ops` for each. Check that every data file exists and that the mixed runs fit in the corpus (insert budget); stop with an error if not.
+7. **Shuffle the list**, with a pseudo-random order that depends only on `SHUFFLE_SEED` (a small seeded generator inside `run.sh`; the same params file gives the same order, and the seed is in `meta.txt`). *Why: a laptop heats up over a session; random order keeps throttling from always hitting the same variant. A fixed seed keeps the sweep reproducible.*
+8. For each run: optional cool-down pause, then `run.sh` under `timeout`, prefixed with `taskset` when pinned. Check the output, prepend context columns to each stdout row and append to `results.tsv`; save stderr to `logs/`.
+9. A non-zero exit, a timeout, malformed output or a malformed latency file is recorded in `failures.tsv` as a failed run, and the runner continues. When pinned to P-cores, runs with more workers than P-core threads are skipped.
+10. After the sweep, record the preflight state again in `meta.txt`; warn (do not stop) on battery power or if swap pages were moved during the sweep.
 
 **Rules**
 
 - **Timeouts are generous:** 30 minutes per run to start, tightened later to several times the slowest normal run. *Why: a deadlock would otherwise hang an overnight run forever; standard `timeout` adds no dependency.*
 - **Build and runtime settings are fixed and recorded:** compiler optimization flags in `build.sh`, JVM heap (`-Xmx`) and GC flags in `run.sh`, `GOMAXPROCS` set explicitly. *Why: fairness depends on how code is compiled and run, not just on the code.*
-- **No dependencies beyond bash and standard Linux tools** (`timeout`, `taskset`, `shuf`).
+- **No dependencies beyond bash and standard Linux tools** (`timeout`, `taskset`, and coreutils, `awk`, `sed`).
 
 ## Hardware and methodology
 
@@ -376,19 +401,19 @@ Adding a worker does not add a fixed amount of compute: speedup curves bend wher
 
 ### Pinning
 
-- **Main experiment unpinned:** the OS schedules freely, as real software runs.
-- **Control experiment pinned to P-cores** (`taskset`). *Why: if the bend at 6 workers disappears when pinned, it is proven to be the hardware, not contention. Turns a guess into evidence.*
+- **Main experiment unpinned** (`params.sh`, `PINNING=none`): the OS schedules freely, as real software runs.
+- **Control experiment pinned to P-cores** (`taskset`), as a separate, smaller experiment: `bench/params-pinned.sh`, with its own `EXPERIMENT` name (`pinned`) and results folder. It runs strong scaling only, workers up to 12 (the P-core threads), the modes build, query and mixed-50-50, two corpus sizes for build, and one value for each numeric parameter; every value is also in `params.sh`, so rows compare directly. *Why: if the bend at 6 workers disappears when pinned, it is proven to be the hardware, not contention. Turns a guess into evidence, without doubling the main sweep.*
 
 ### Memory budget
 
 - About **20 GB** for the benchmark; **swap must never be used.** *Why: swapping would dominate the measurements.*
 - Estimated index memory: about 1.5× the text size for compact C arrays, up to about 5× for Java or linked lists. The worst variant sets the limit.
 - Largest corpus prefix ≈ **4 GB** of text; weak-scaling base ≈ **256 MB** (≈ 40–50 million tokens). Estimates, to be confirmed with the first measured bytes per posting.
-- Mixed modes need enough documents after the preloaded part for all inserts; sized together with `--ops`.
+- Mixed modes need enough documents after the preloaded part for all inserts; sized together with `--ops` and checked by the runner before the sweep (section Workload model).
 
 ### Run conditions
 
-- Plugged in, performance power profile, other programs closed.
+- Plugged in, performance power profile, other programs closed. The runner records the power source, swap use and CPU power profile (platform profile, governor, energy preference) in `meta.txt` before and after the sweep, and warns, without stopping, on battery power or if swap pages were moved during the sweep. The profile is recorded, not enforced; any warning is reported with the results.
 - Cool-down pauses between runs and randomized run order. *Why: thin laptops throttle when hot.*
 - Per-repetition rows make throttling visible as variability.
 
@@ -401,7 +426,10 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Preprocessing details: the tool for stripping wiki markup is still open (`corpus/normalize.sh` starts from plain text, one document per line). Implemented: tokenization rule and dropped-line counts (section Corpus), prefix cutting (`corpus/make-prefixes.sh`), query generator (`corpus/make-queries.sh`).
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
-- [ ] Size `--ops`, `--preload` and the query count so that runs and latency files stay manageable.
+- [ ] Size `--ops`, `--preload`, `QUERY_CORPUS` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS`, so the current placeholders in `params.sh` will not pass on the real corpus until sized.
+- [ ] Insert budget in mixed modes: how a variant guarantees at most ceil(`--ops` × insert share) inserts although the operation kind is a probability (for example a per-worker pattern or quota instead of random draws).
+- [ ] At one worker, strong and weak scaling of build coincide (same corpus, same work), so the run appears twice with only `scaling` different; decide whether to deduplicate.
+- [ ] Working directory of `run.sh` (rule 6): today the runner starts it from the caller's directory, so `run.sh` must locate its `build/` itself.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
 - [ ] Tighten `TIMEOUT` after the first full runs.
-- [x] Decide how `results/<experiment>` folders are named: each params file sets `EXPERIMENT` (`full`, `quick`), so dev results land in ignored folders.
+- [x] Decide how `results/<experiment>` folders are named: each params file sets `EXPERIMENT` (`full`, `pinned`, `quick`), so dev results land in ignored folders.

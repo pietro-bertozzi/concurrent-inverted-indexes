@@ -10,7 +10,7 @@ The full design (workload, data, CLI contract, results format, methodology) is i
 ## Layout
 
 ```
-bench/       runner (run.sh) and parameter files (params*.sh)
+bench/       runner (run.sh) and parameter files (params.sh, params-pinned.sh, params-quick.sh)
 corpus/      preprocessing scripts: raw Wikipedia -> corpus, queries
 data/        generated corpus prefixes and query files (not committed); raw dumps in data/raw/
 impl/        impl/<language>/<variant>/ with build.sh, run.sh, dimensions.tsv
@@ -34,19 +34,27 @@ corpus/make-queries.sh bench/params.sh data/corpus-256mb.txt     # data/queries.
 Run the benchmark:
 
 ```
-./bench/run.sh bench/params.sh          full measurements
+./bench/run.sh bench/params.sh          main experiment (unpinned)
+./bench/run.sh bench/params-pinned.sh   control experiment pinned to the P-cores
 ./bench/run.sh bench/params-quick.sh    small sweep for development
 ```
 
+Before the sweep the runner checks that the data files exist and that the mixed modes fit
+in the corpus (`QUERY_CORPUS`); it records power source, swap and CPU profile in
+`meta.txt` and warns on battery power or swap use. The run order is shuffled with
+`SHUFFLE_SEED`.
+
 Results land in `results/<experiment>/<timestamp>/` (`results.tsv`, `failures.tsv`,
-`logs/`, `latencies/`, `meta.txt`). Hand-made test data (tiny corpus, queries and the
+`runlist.tsv`, `logs/`, `latencies/`, `meta.txt`). Hand-made test data (tiny corpus, queries and the
 expected canonical dump) is in `data/tiny/`.
 
 ## Status
 
 Infrastructure phase: skeleton, parameters, runner, test data and preprocessing scripts are
 done; there are no index implementations yet. The runner has been tested only against
-throwaway fake variants.
+throwaway fake variants. The `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS` values in
+`params.sh` are placeholders and will not pass the runner's mixed-sizing check on the real
+corpus until they are sized.
 
 ## License
 

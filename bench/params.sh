@@ -17,10 +17,15 @@ THREADS="1 2 4 6 8 12 14 16 22"
 THREADS_WEAK="1 2 4 8 16"
 
 # Corpus prefixes, in MB of text (cut by token count, see corpus/make-prefixes.sh).
-# Files are data/corpus-<MB>mb.txt. Weak scaling for build and query uses the corpus
-# CORPUS_BASE_MB * N, so every such size must also be listed in CORPORA_MB.
+# Files are data/corpus-<MB>mb.txt. Only build mode scales the corpus: strong scaling
+# runs on every size in CORPORA_MB, weak scaling on CORPUS_BASE_MB * N (so every such
+# size must also be listed in CORPORA_MB).
 CORPUS_BASE_MB=256
 CORPORA_MB="256 512 1024 2048 4096"
+
+# The one corpus (MB, must be listed in CORPORA_MB) that query and mixed modes run on:
+# they scale the number of operations instead. Placeholder, to be sized.
+QUERY_CORPUS=256
 
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 16 64"
@@ -28,8 +33,9 @@ BATCH="1 64 1024"
 QUEUE="1024"        # queue capacity: placeholder, to be sized (design.md, Open items)
 
 # CPU placement: none = the OS schedules freely; pcores = taskset on the P-core threads.
-# Runs with more workers than PCORES_CPUS has CPUs are skipped when pinned.
-PINNING="none pcores"
+# Runs with more workers than PCORES_CPUS has CPUs are skipped when pinned. The main
+# experiment is unpinned; the pinned control experiment is bench/params-pinned.sh.
+PINNING="none"
 PCORES_CPUS="0-11"  # /sys/devices/cpu_core/cpus on the benchmark machine
 
 # Operations (query and mixed modes). Placeholders, to be sized (design.md, Open items).
