@@ -32,8 +32,9 @@ later, against the real implementations.
 - **Results format:** TSV, one row per repetition, raw values, integers in ns and bytes.
   Column order is fixed; new columns are only added at the end. No averaging anywhere
   except in the (later) Python analysis.
-- **No dependencies** beyond bash and standard Linux tools (coreutils, `timeout`, `taskset`,
-  `shuf`). Ask before adding any tool or package.
+- **No dependencies** beyond bash and the standard Linux tools actually used: coreutils
+  (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git`.
+  Ask before adding any tool or package.
 - **Numeric parameters** live only in `bench/params*.sh` (plain bash, `source`d).
 
 ## Code style
