@@ -48,6 +48,7 @@ The filesystem is the registry: the runner discovers every implementation by sca
 ```
 bench/
   run.sh            runner: discovers, builds, sweeps, collects
+  check.sh          correctness check: every variant against the expected dump
   common.sh         shared by run.sh and check.sh: discovery, dimensions, column names
   params.sh         numeric parameters of the main experiment (lists of values)
   params-pinned.sh  control experiment pinned to P-cores (smaller sweep)
@@ -74,7 +75,7 @@ analysis/           Python notebooks and scripts (later)
 2. Folders starting with `_` hold shared code and are not variants. *Why: input parsing, timing, output and dumping are written once per language, so a fix reaches every variant and the comparison stays fair.*
 3. Every variant has two executable entry points with fixed names: `build.sh` (compile this variant) and `run.sh` (start it with the CLI contract). *Why: language-specific knowledge stays in the language folder; the runner calls the same two commands for every language.*
 4. Every variant has a `dimensions.tsv` describing itself (section Dimensions). *Why: the description lives next to the code it describes.*
-5. Every language has a `sequential` variant. *Why: the baseline for absolute speedup and concurrency overhead.* At discovery, the runner warns for every language folder without a usable `sequential` variant; it does not stop.
+5. Every language has a `sequential` variant. *Why: the baseline for absolute speedup and concurrency overhead.* At discovery, the runner (and `check.sh`) warns for every language folder without a usable `sequential` variant; it does not stop.
 6. `build.sh` writes all its outputs into `build/` inside the variant folder, and `run.sh` runs from there. The runner always passes absolute paths (input, queries, latencies, dump) and starts `run.sh` by absolute path; `run.sh` locates `build/` from its own location (`$(dirname "$0")`) and never depends on the working directory. *Why: one ignore rule covers every language, nothing generated ever mixes with source, and a variant behaves the same however and from wherever it is started.*
 7. A variant folder without an executable `build.sh`, an executable `run.sh` or a `dimensions.tsv` is skipped with a warning and recorded in `failures.tsv` (phase `discover`), like a failed build. *Why: one half-written variant must not stop an overnight sweep.*
 
@@ -348,6 +349,7 @@ the	0:2 1:2
 - Two variants that built the same index produce byte-identical files, compared with `cmp`. *Why: internally the variants look completely different; only a canonical form makes them comparable.*
 - It works for `build` and `query` modes, and for the **final index** of mixed modes: with fixed seeds, the set of inserted documents is deterministic.
 - It is the only check that would catch a variant that is fast because it loses updates, the typical race-condition bug. Worth running at least once per variant before trusting its numbers.
+- **`bench/check.sh [params-file]`** automates it. It discovers the variants like the runner, builds each, and runs it with `--dump` on the hand-made test data (`data/tiny/`: corpus, queries and `expected-dump.tsv`) in `build` and `query` mode (those the variant declares), once for every worker count in `THREADS` of the params file (default `params-quick.sh`) up to the variant's `max_threads`, one repetition without warm-up each; numeric parameters in `uses` take the first value of the params file. The dump is compared with `cmp`. stdout is a TSV with one row per variant (`variant`, `result` = `PASS` or `FAIL`, `detail`), stderr shows progress, the exit code is 0 only if every variant passed. Mixed modes are not checked: their final index depends on how many inserts happen. *Why: worker counts above the number of documents and above the number of cores are where lost updates and edge cases show up, and the test corpus is small enough to run them all in seconds.*
 - Query results during mixed runs depend on timing and are not compared. Visibility checks (no half-indexed document seen) belong to the variant design.
 
 ## Benchmark runner

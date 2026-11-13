@@ -10,7 +10,7 @@ The full design (workload, data, CLI contract, results format, methodology) is i
 ## Layout
 
 ```
-bench/       runner (run.sh), shared code (common.sh) and
+bench/       runner (run.sh), correctness check (check.sh), shared code (common.sh) and
              parameter files (params.sh, params-pinned.sh, params-quick.sh)
 corpus/      preprocessing scripts: raw Wikipedia -> corpus, queries
 data/        generated corpus prefixes and query files (not committed); raw dumps in data/raw/
@@ -38,6 +38,14 @@ Run the benchmark:
 ./bench/run.sh bench/params.sh          main experiment (unpinned)
 ./bench/run.sh bench/params-pinned.sh   control experiment pinned to the P-cores
 ./bench/run.sh bench/params-quick.sh    small sweep for development
+```
+
+Check that every variant builds the right index (dump of the test data in `data/tiny/`
+compared with `cmp`; prints one PASS/FAIL row per variant, exit code 0 only if all pass):
+
+```
+./bench/check.sh                        uses bench/params-quick.sh
+./bench/check.sh bench/params.sh        worker counts of another params file
 ```
 
 Before the sweep the runner checks that the data files exist and that the mixed modes fit
