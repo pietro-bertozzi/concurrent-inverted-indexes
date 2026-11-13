@@ -25,7 +25,7 @@ CORPORA_MB="256 512 1024 2048 4096"
 
 # The one corpus (MB, must be listed in CORPORA_MB) that query and mixed modes run on:
 # they scale the number of operations instead. Placeholder, to be sized.
-QUERY_CORPUS=256
+QUERY_CORPUS_MB=256
 
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 16 64"

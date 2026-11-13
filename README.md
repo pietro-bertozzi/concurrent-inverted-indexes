@@ -10,7 +10,8 @@ The full design (workload, data, CLI contract, results format, methodology) is i
 ## Layout
 
 ```
-bench/       runner (run.sh) and parameter files (params.sh, params-pinned.sh, params-quick.sh)
+bench/       runner (run.sh), shared code (common.sh) and
+             parameter files (params.sh, params-pinned.sh, params-quick.sh)
 corpus/      preprocessing scripts: raw Wikipedia -> corpus, queries
 data/        generated corpus prefixes and query files (not committed); raw dumps in data/raw/
 impl/        impl/<language>/<variant>/ with build.sh, run.sh, dimensions.tsv
@@ -40,9 +41,10 @@ Run the benchmark:
 ```
 
 Before the sweep the runner checks that the data files exist and that the mixed modes fit
-in the corpus (`QUERY_CORPUS`); it records power source, swap and CPU profile in
-`meta.txt` and warns on battery power or swap use. The run order is shuffled with
-`SHUFFLE_SEED`.
+in the corpus (`QUERY_CORPUS_MB`); it records power source, swap and CPU profile in
+`meta.txt` and warns on battery power or swap use. It also warns if a language has no
+`sequential` variant. Runs that differ only in scaling run once, with `scaling` =
+`strong,weak`. The run order is shuffled with `SHUFFLE_SEED`.
 
 Results land in `results/<experiment>/<timestamp>/` (`results.tsv`, `failures.tsv`,
 `runlist.tsv`, `logs/`, `latencies/`, `meta.txt`). Hand-made test data (tiny corpus, queries and the
@@ -52,7 +54,7 @@ expected canonical dump) is in `data/tiny/`.
 
 Infrastructure phase: skeleton, parameters, runner, test data and preprocessing scripts are
 done; there are no index implementations yet. The runner has been tested only against
-throwaway fake variants. The `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS` values in
+throwaway fake variants. The `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS_MB` values in
 `params.sh` are placeholders and will not pass the runner's mixed-sizing check on the real
 corpus until they are sized.
 

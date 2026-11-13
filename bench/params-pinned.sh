@@ -14,10 +14,10 @@ SCALING="strong"
 THREADS="1 2 4 6 8 12"
 THREADS_WEAK="1 2 4 8"
 
-# Build runs on two corpus sizes; query and mixed on QUERY_CORPUS, as in params.sh.
+# Build runs on two corpus sizes; query and mixed on QUERY_CORPUS_MB, as in params.sh.
 CORPUS_BASE_MB=256
 CORPORA_MB="256 1024"
-QUERY_CORPUS=256
+QUERY_CORPUS_MB=256
 
 # One value each: the control is about the thread count, not about these parameters.
 PARTITIONS="16"
