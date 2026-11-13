@@ -52,6 +52,10 @@ later, against the real implementations.
 - After each completed step, stage only the files of that step, commit with a clear message
   (what and why), and push.
 - Don't touch files outside the current step.
+- `docs/design.md` must always match the code. Every decision, deviation or new
+  convention updates `design.md` in the same commit as the code that implements it.
+  `README.md` stays in sync with how to run things. Never leave a decision only in the
+  chat or only in the code.
 
 ## Machine
 
