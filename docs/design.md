@@ -169,8 +169,10 @@ All implementations read the same preprocessed English Wikipedia, so text handli
 
 ### Corpus
 
-- **Source:** English Wikipedia dump. *Why: realistic document lengths, recognizable, and tens of GB of text, far more than needed.*
-- **Preprocessing, done once:** strip wiki markup, lowercase, remove punctuation. Keep stopwords; no stemming or lemmatization. A token is a space-separated string.
+- **Source:** the *English Wikipedia* text corpus of TU Darmstadt (A. Panchenko), Zenodo record [10.5281/zenodo.229904](https://doi.org/10.5281/zenodo.229904), CC BY 4.0: plain text extracted with WikiExtractor from the Wikipedia dump of **26 September 2015**, one file `wikipedia.txt.gz` (4,458,579,201 bytes, MD5 `c1fefd53b73798459e8623e2b965f75f`), downloaded into `data/raw/`. *Why: realistic document lengths, recognizable, and far more text than needed. A fixed, citable snapshot with a checksum makes the corpus reproducible by anyone; extracting a current dump ourselves would depend on the day of the download and on our own markup stripper, which would need its own validation.*
+- **Raw format** (inspected on a sample): no `<doc>` tags. An article is a title line, one empty line, then the body with one paragraph or heading per line (headings are plain lines, lists and tables are mostly gone); articles are separated by runs of empty lines. Runs of two or more empty lines also occur *inside* articles (sections whose content was stripped, such as "External links"), so empty lines alone are not a delimiter. Leftover markup is small: HTML-like tags (`<br>`, `</ref>`, `<math>`, `<poem>`), a few `[[File:…]]` lines and URLs.
+- **Preprocessing, done once** (`corpus/extract.sh`, then `corpus/normalize.sh`): `extract.sh` cuts the raw text into documents and joins each into one line, title first. A **title** is a non-empty line preceded by at least two empty lines (or starting the file), followed by exactly one empty line and then text. *Why: on a 400,000-line sample (4,435 documents) the runs of two or more empty lines number 4,681, of which 246 are inside articles; the title pattern finds 4,435 documents with plausible titles (about 0.6% look odd: a leading space, final punctuation or more than 80 characters).* It also deletes HTML-like tags (`<[^<>]*>`). Then `normalize.sh` lowercases and removes punctuation. Keep stopwords; no stemming or lemmatization. A token is a space-separated string.
+- **Accepted imperfections** (negligible, same for every language): URLs and `[[File:…]]` residue become ordinary tokens (`http`, `www`, `jpg`, `thumb`; below 0.05% of the tokens in the sample); the text of `<math>` stays; a few documents are wrongly split or merged by the boundary rule; documents keep the order of the dump, which is not alphabetical (the first articles are Anarchism, Autism, Albedo, …), so prefixes are the first articles of the dump, not a random sample. *Why: removing these would need a markup parser, which is exactly what the pre-extracted source avoids; the benchmark measures concurrency, not text quality.*
 - **Tokenization rule** (`corpus/normalize.sh`): every run of characters that are not letters or digits (any script) becomes one space, so `don't` gives `don t`. Combining marks are not letters, so words in scripts that use them are split (Devanagari `हिन्दी` becomes `हिन दी`); accepted, because it is negligible on English Wikipedia and, since the corpus is built once, identical for every language.
 - **Dropped lines:** a line with invalid UTF-8, or with no tokens left after normalization, is dropped, so the document ID is the line number of the *output*. Nothing is dropped silently: `normalize.sh` prints the number of kept and dropped lines to stderr.
 - **Format:** one document per line, tokens separated by single spaces, UTF-8. The document ID is the line number, starting at 0. *Why: trivial to parse even in C; implementations make no decisions about text.*
@@ -183,6 +185,17 @@ the dog chased the cat
 ### Corpus sizes
 
 - Sizes are **prefixes** of the same corpus (the first 256 MB, 512 MB, …), doubled by **token count**, not bytes or documents. *Why: same kind of text at every size; tokens measure the actual work, while document lengths vary widely.*
+- **Measured on the real corpus** (`make-prefixes.sh bench/params.sh`; 4,508,255 documents and 11.35 GB in total after `extract.sh` and `normalize.sh`, 43 lines without tokens dropped, none with invalid UTF-8):
+
+| `CORPORA_MB` | tokens | bytes | documents |
+|---|---|---|---|
+| 256 | 42,663,346 | 256,013,275 | 15,005 |
+| 512 | 85,326,803 | 510,242,546 | 36,224 |
+| 1024 | 170,656,558 | 998,426,566 | 108,324 |
+| 2048 | 341,306,813 | 2,009,975,716 | 263,007 |
+| 4096 | 682,613,897 | 4,022,991,025 | 764,320 |
+
+  Document length falls strongly along the dump: the first prefix averages about 17 KB per document, the last about 5 KB, and the whole corpus about 2.5 KB (long articles come first, stubs later). So the number of documents is **not** proportional to the corpus size, which matters wherever documents are counted (`--preload`, `PRELOAD_DOCS`, the insert budget). Preprocessing the whole dump takes about 16 minutes (`extract.sh` + `normalize.sh`), cutting the prefixes 17 s, generating 100,000 queries 44 s.
 - Vocabulary grows slower than text (Heaps' law): twice the text gives fewer than twice the distinct terms. Accepted and noted in the report.
 - Weak-scaling sizes of build mode are multiples of a base unit (about 256 MB at 1 worker, to be confirmed). Every corpus size the runner uses (`CORPORA_MB`, base × N, `QUERY_CORPUS_MB`) must be a prefix listed in `CORPORA_MB`; `make-prefixes.sh` cuts exactly those.
 
@@ -430,10 +443,10 @@ The shared design is complete; what remains are the variant designs and numbers 
 
 - [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
 - [ ] Visibility check for mixed modes (what a query may observe).
-- [ ] Preprocessing details: the tool for stripping wiki markup is still open (`corpus/normalize.sh` starts from plain text, one document per line). Implemented: tokenization rule and dropped-line counts (section Corpus), prefix cutting (`corpus/make-prefixes.sh`), query generator (`corpus/make-queries.sh`).
+- [x] Preprocessing: markup stripping is settled by using a pre-extracted plain-text source (section Corpus); `corpus/extract.sh` (documents), `corpus/normalize.sh` (tokenization), `corpus/make-prefixes.sh` (prefixes) and `corpus/make-queries.sh` (queries) are implemented.
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
-- [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized.
+- [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized. Measured limit: the 256 MB corpus has 15,005 documents (section Corpus sizes), fewer than `PRELOAD_DOCS=50000`; the query generator then uses all of them.
 - [ ] Insert budget in mixed modes: how a variant guarantees at most ceil(`--ops` × insert share) inserts although the operation kind is a probability (for example a per-worker pattern or quota instead of random draws, or operation types generated up front from the seed). A fixed insert count would also let `check.sh` check mixed modes.
 - [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
 - [ ] Tighten `TIMEOUT` after the first full runs.

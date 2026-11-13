@@ -23,11 +23,14 @@ docs/        design document
 
 ## Usage
 
-Prepare the data once (the wiki-markup stripping step is not decided yet, see
-`docs/design.md`, Open items; the scripts below start from plain text, one document per line):
+Prepare the data once. The source is the pre-extracted English Wikipedia of TU Darmstadt
+(Sept 2015, [DOI 10.5281/zenodo.229904](https://doi.org/10.5281/zenodo.229904), 4.4 GB,
+see `docs/design.md`, section Corpus):
 
 ```
-corpus/normalize.sh < plain.txt > data/raw/corpus.txt
+curl -L -o data/raw/wikipedia.txt.gz https://zenodo.org/api/records/229904/files/wikipedia.txt.gz/content
+md5sum data/raw/wikipedia.txt.gz                                 # c1fefd53b73798459e8623e2b965f75f
+zcat data/raw/wikipedia.txt.gz | corpus/extract.sh | corpus/normalize.sh > data/raw/corpus.txt
 corpus/make-prefixes.sh bench/params.sh data/raw/corpus.txt      # data/corpus-<MB>mb.txt
 corpus/make-queries.sh bench/params.sh data/corpus-256mb.txt     # data/queries.txt
 ```
