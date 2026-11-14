@@ -141,6 +141,8 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 
 **`CHECK_OPS=7`, `CHECK_PRELOAD=1` (all three params files).** `data/tiny/` has 6 documents and 7 queries, and three wishes cannot all hold: preload + floor(`CHECK_OPS` × 80 / 100) ≤ 6, `CHECK_OPS` > 7, and a preload above 0. With `CHECK_OPS` ≥ 8 the largest share already inserts 6 documents, which forces a preload of 0. *Why 7 and 1: wrap-around of the query file is still exercised, because every worker starts at a random offset and cycles past the end; a preload of 1 keeps the preload path tested (1 + floor(7 × 80 / 100) = 1 + 5 = 6 documents, exactly the corpus).*
 
+With `CHECK_OPS=7`, mixed-95-5 does floor(7 × 5 / 100) = 0 inserts, so inserts are checked only by mixed-50-50 and mixed-20-80; mixed-95-5 checks the preload and the queries.
+
 The file is plain bash, read with `source`. *Why: no parsing and no dependency; every implementation gets exactly the same values from one place.* Language is not a parameter: the folder says it.
 
 There are three params files with the same variable names: `params.sh` (the main, unpinned experiment), `params-pinned.sh` (the pinned control experiment, see Pinning) and `params-quick.sh` (development). The runner validates the file before doing anything: every variable defined, numbers and lists well-formed, `CORPUS_BASE_MB` and `QUERY_CORPUS_MB` listed in `CORPORA_MB`, and, if weak scaling of build is requested, every size base × N listed too.
@@ -302,6 +304,20 @@ A run has exactly `--ops K` operations, split exactly; ratios are exact, not pro
 - Consequence: the final index of a mixed run is always *preload + the next I documents*, independent of timing. Mixed runs are deterministic and can be checked by `bench/check.sh` (section Correctness), and the sizing check knows exactly how many documents a run needs (`preload + I`, section Workload model).
 - Build mode is unchanged: the whole corpus, no `--ops`.
 
+### Conventions of the reference implementation (Java)
+
+Details that the rules above leave open; fixed by the Java implementation (`impl/java/_common/`) and followed by Go, C++ and C. All Java sources are in the default package: `build.sh` compiles `_common/*.java` and the variant's own files together into `build/`.
+
+- **Repetition numbers** start at 0 and count warm-ups first (`rep` 0 … W+R−1); `warmup` is 1 for the first W.
+- **`load_ns`:** every repetition reads the whole input file again into memory, one string per line (document ID = position). Splitting a line into tokens is part of indexing (`build_ns`, `preload_ns`, the timed inserts), not of loading. The previous repetition's data is unreachable by then, so repetitions do not accumulate memory.
+- **Phases:** `build` mode: `build_ns` is indexing the whole corpus, then `finalize_ns` is `finish()`. `query`: `build_ns`, then `finalize_ns` (the queries need the finished index), then `run_ns`. Mixed: `preload_ns`, `run_ns`, then `finalize_ns` after the run. `ops_query` and `ops_insert` are 0 in build mode. `finalize_ns` is measured even when `finish()` does nothing, as in the sequential variants, whose posting lists are sorted by construction.
+- **Query cursor:** a worker's k-th query operation (k from 0) is query number `(offset + k) mod Q`; inserts do not advance it.
+- **Latency:** each query is timed with two clock readings around it, inside `run_ns` (the cost of the readings is part of the measurement, the same in every language). Latencies are written to `--latencies` after the repetition's row measurements are taken; the file is opened once and holds all repetitions.
+- **Dump:** written once, after the last repetition (from that repetition's index). Terms are sorted by their **UTF-8 bytes** (the order of `LC_ALL=C sort`), not by the language's native string order.
+- **Argument checking:** options that do not belong to the mode (`--queries`, `--ops`, `--seed`, `--latencies` outside query and mixed; `--preload` outside mixed) are errors, like missing required ones and numeric parameters not in the variant's `uses`; a `--threads` above the variant's maximum is an error.
+- **Process measurements (Java, from `/proc`):** `peak_rss_bytes` is `VmHWM`; CPU times come from `/proc/self/stat` with the resolution of a clock tick (10 ms), so very short repetitions show coarse CPU times; context switches are summed over the threads alive when the repetition starts and ends (threads that exit in between are not counted). Other languages use their exact equivalents (`getrusage`) where available.
+- **Sequential variant:** `partitioning` `single`, `writer` `direct`, `write_timing` `immediate`, no `coordination`, `granularity` or `visibility`, `uses` `none`, `max_threads` 1. The index is one `HashMap`; a term seen earlier in the same document is the last posting of its list, so the frequency is counted without a per-document map. `build.sh` writes `javac` and `java` versions and `-Xmx20g` to `build/settings.txt`.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
@@ -430,7 +446,7 @@ Hardware counters (cache misses, false sharing via `perf`) are out of scope for 
 
 Correctness checking is an optional sanity check, not a trusted guarantee: the canonical dump shows whether variants agree, not that they are right.
 
-With `--dump`, a variant writes its final index in one fixed text form, in a separate untimed run: terms sorted, one per line, postings `docid:frequency` sorted by document ID.
+With `--dump`, a variant writes its final index in one fixed text form, in a separate untimed run: terms sorted by their UTF-8 bytes, one per line, postings `docid:frequency` sorted by document ID.
 
 ```
 cat	0:1 1:1
