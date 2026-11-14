@@ -318,6 +318,13 @@ Details that the rules above leave open; fixed by the Java implementation (`impl
 - **Process measurements:** see Process measurements below; Java calls `getrusage` through the FFM API (`java.lang.foreign`, `impl/java/_common/Proc.java`), which is why the JVM runs with `--enable-native-access=ALL-UNNAMED`.
 - **Sequential variant:** `partitioning` `single`, `writer` `direct`, `write_timing` `immediate`, no `coordination`, `granularity` or `visibility`, `uses` `none`, `max_threads` 1. The index is one `HashMap`; a term seen earlier in the same document is the last posting of its list, so the frequency is counted without a per-document map. `build.sh` writes `javac` and `java` versions and the run flags (`-Xmx20g`, `--enable-native-access=ALL-UNNAMED`) to `build/settings.txt`.
 
+**Go** follows the Java conventions above (same phases, columns, argument checks, dump order, query cursor and latency timing); `getrusage` is `syscall.Getrusage`. What is specific to Go:
+
+- **Build:** `go build` accepts named `.go` files from one directory only (`named files must all be in one directory`), so compiling `_common/` and a variant together cannot be a single command on the original folders. `build.sh` therefore copies `_common/*.go` and the variant's `*.go` into `build/src/` and runs `go build` there on `./*.go`, as package main, with no `go.mod`; the binary is `build/index`, and `run.sh` executes it. A file name that exists in both `_common/` and the variant is an error (`build.sh` stops and names the file): the copy would silently overwrite one of them. *Why: keeps `_common/` shared as in Java, with no module and no tool beyond `go`; the cost is that compiler messages point to the copies in `build/src/`, which have the same names as the originals.* All Go sources are `package main`.
+- **Index interface:** `Each(visit)` replaces Java's `entries()`; posting lists are two `[]int32` slices grown with `append` (Go's own growth policy, not Java's doubling from 2). Tokens are substrings of the document line (no copy); the map keys therefore point into the loaded lines, which stay alive during the repetition anyway.
+- **Sequential variant:** one built-in `map[string]*PostingList`; `build.sh` writes `go version` to `build/settings.txt`; `GOMAXPROCS` is logged on stderr at start.
+- **Cross-check against Java** (8 MB corpus, 1 worker, 1 warm-up + 1 repetition): identical dumps in all five modes, and identical sums of query result sizes on stderr in query mode and, since one worker makes them deterministic, in the mixed modes.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
@@ -338,7 +345,7 @@ Details that the rules above leave open; fixed by the Java implementation (`impl
 | Language | Build | Run |
 | --- | --- | --- |
 | Java | plain `javac` (JDK 25), no Maven/Gradle | `java`, default GC, fixed `-Xmx20g`, `--enable-native-access=ALL-UNNAMED` |
-| Go | plain `go build`, defaults | defaults (`GOMAXPROCS` not changed, but recorded) |
+| Go | plain `go build`, defaults, no `go.mod` (section Conventions of the reference implementation, Go) | defaults (`GOMAXPROCS` not changed, but recorded) |
 | C++ | `g++ -O2 -std=c++17` | — |
 | C | `gcc -O2 -std=c17` | — |
 
