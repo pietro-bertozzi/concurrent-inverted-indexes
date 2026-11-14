@@ -315,8 +315,8 @@ Details that the rules above leave open; fixed by the Java implementation (`impl
 - **Latency:** each query is timed with two clock readings around it, inside `run_ns` (the cost of the readings is part of the measurement, the same in every language). Latencies are written to `--latencies` after the repetition's row measurements are taken; the file is opened once and holds all repetitions.
 - **Dump:** written once, after the last repetition (from that repetition's index). Terms are sorted by their **UTF-8 bytes** (the order of `LC_ALL=C sort`), not by the language's native string order.
 - **Argument checking:** options that do not belong to the mode (`--queries`, `--ops`, `--seed`, `--latencies` outside query and mixed; `--preload` outside mixed) are errors, like missing required ones and numeric parameters not in the variant's `uses`; a `--threads` above the variant's maximum is an error.
-- **Process measurements (Java, from `/proc`):** `peak_rss_bytes` is `VmHWM`; CPU times come from `/proc/self/stat` with the resolution of a clock tick (10 ms), so very short repetitions show coarse CPU times; context switches are summed over the threads alive when the repetition starts and ends (threads that exit in between are not counted). Other languages use their exact equivalents (`getrusage`) where available.
-- **Sequential variant:** `partitioning` `single`, `writer` `direct`, `write_timing` `immediate`, no `coordination`, `granularity` or `visibility`, `uses` `none`, `max_threads` 1. The index is one `HashMap`; a term seen earlier in the same document is the last posting of its list, so the frequency is counted without a per-document map. `build.sh` writes `javac` and `java` versions and `-Xmx20g` to `build/settings.txt`.
+- **Process measurements:** see Process measurements below; Java calls `getrusage` through the FFM API (`java.lang.foreign`, `impl/java/_common/Proc.java`), which is why the JVM runs with `--enable-native-access=ALL-UNNAMED`.
+- **Sequential variant:** `partitioning` `single`, `writer` `direct`, `write_timing` `immediate`, no `coordination`, `granularity` or `visibility`, `uses` `none`, `max_threads` 1. The index is one `HashMap`; a term seen earlier in the same document is the last posting of its list, so the frequency is counted without a per-document map. `build.sh` writes `javac` and `java` versions and the run flags (`-Xmx20g`, `--enable-native-access=ALL-UNNAMED`) to `build/settings.txt`.
 
 ### Queries
 
@@ -329,16 +329,20 @@ Details that the rules above leave open; fixed by the Java implementation (`impl
 - Only query operations record a latency; inserts do not.
 - **Results are consumed:** each worker adds up the sizes of its query results; after timing, the total over all workers is written to stderr, one line per repetition. *Why: a result that nothing reads may be removed by the JIT (Java) or the optimizer (`-O2`), and the query timings would then mean nothing. stdout stays unchanged. In query mode the total must be identical across variants and languages (same index, same queries), which is a free cross-check in the logs; in mixed modes it depends on timing.*
 
+### Process measurements (identical in every language)
+
+**Every language takes all process measurements from `getrusage(RUSAGE_SELF)`**, called around each repetition (Java through the FFM API, Go with `syscall.Getrusage`, C and C++ directly): `peak_rss_bytes` is `ru_maxrss` (kilobytes on Linux, times 1024), `cpu_user_ns` and `cpu_sys_ns` are the differences of `ru_utime` and `ru_stime` (microsecond resolution), `ctx_vol` and `ctx_invol` the differences of `ru_nvcsw` and `ru_nivcsw`. *Why: one system call for all columns, the same in every language and with the same units, covering all threads of the process (also those that have ended), with no parsing of text files and no dependence on the runtime's own accounting.*
+
 ### Build and runtime settings (as standard as possible)
 
 | Language | Build | Run |
 | --- | --- | --- |
-| Java | plain `javac`, no Maven/Gradle | `java`, default GC, fixed `-Xmx20g` |
+| Java | plain `javac` (JDK 25), no Maven/Gradle | `java`, default GC, fixed `-Xmx20g`, `--enable-native-access=ALL-UNNAMED` |
 | Go | plain `go build`, defaults | defaults (`GOMAXPROCS` not changed, but recorded) |
 | C++ | `g++ -O2 -std=c++17` | — |
 | C | `gcc -O2 -std=c17` | — |
 
-- `-Xmx20g` is the only non-default setting. *Why: Java's default maximum heap is ¼ of RAM (~8 GB), which the largest corpus can exceed; 20 GB matches the memory budget.*
+- `-Xmx20g` and `--enable-native-access=ALL-UNNAMED` are the only non-default settings. *Why: Java's default maximum heap is ¼ of RAM (~8 GB), which the largest corpus can exceed; 20 GB matches the memory budget. The second flag allows the native call to `getrusage` (Process measurements) and silences the JVM's warning about it, which would otherwise appear on stderr of every run.*
 - Go records its `GOMAXPROCS` (`runtime.GOMAXPROCS(0)`) on stderr at start, so it is in the run's log. *Why: the default follows the CPU affinity, so it is 22 unpinned and 12 under `taskset` to the P-cores; the log shows which value each run had.*
 - `build.sh` records the compiler/JVM version and flags in `build/settings.txt` (column `build_settings`, section Results).
 
@@ -513,7 +517,7 @@ Lenovo IdeaPad Slim, Intel Core Ultra 7 155H, 31 GB RAM, Linux.
 | LP E-cores (low power) | 2 | 2 | slowest |
 | **Total** | **16** | **22** | |
 
-Adding a worker does not add a fixed amount of compute: speedup curves bend where a core type runs out. The exact CPU numbers of each type are still to be read from `/sys/devices/cpu_core/cpus` and `/sys/devices/cpu_atom/cpus`.
+Adding a worker does not add a fixed amount of compute: speedup curves bend where a core type runs out. The CPU numbers of each type (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`): P-cores with hyperthreading are CPUs 0-11, E-cores and LP E-cores are CPUs 12-21.
 
 ### Thread values
 

@@ -7,5 +7,5 @@ here="$(cd "$(dirname "$0")" && pwd)"
 rm -rf "$here/build"
 mkdir -p "$here/build"
 javac -d "$here/build" "$here"/../_common/*.java "$here"/*.java
-echo "javac $(javac -version 2>&1 | cut -d' ' -f2); java $(java -version 2>&1 | head -n 1 | cut -d'"' -f2); run flags: -Xmx20g, default GC" \
+echo "javac $(javac -version 2>&1 | cut -d' ' -f2); java $(java -version 2>&1 | head -n 1 | cut -d'"' -f2); run flags: -Xmx20g --enable-native-access=ALL-UNNAMED, default GC" \
     > "$here/build/settings.txt"
