@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // SequentialIndex is one built-in map from term to posting list, no synchronisation.
 // Documents are added in increasing ID order, so every posting list is already sorted and
 // Finish has nothing to do.
@@ -21,7 +23,9 @@ func (x *SequentialIndex) Add(docID int, doc string) {
 		list := x.m[term]
 		if list == nil {
 			list = &PostingList{}
-			x.m[term] = list
+			// The token is a substring of the document line: clone it, so that the index
+			// owns its keys (as Java's does) and never keeps a document line alive.
+			x.m[strings.Clone(term)] = list
 		}
 		// A term seen earlier in this document is the last posting of its list: count it.
 		if n := len(list.Docs); n > 0 && int(list.Docs[n-1]) == docID {
