@@ -325,6 +325,14 @@ Details that the rules above leave open; fixed by the Java implementation (`impl
 - **Sequential variant:** one built-in `map[string]*PostingList`; `build.sh` writes `go version` to `build/settings.txt`; `GOMAXPROCS` is logged on stderr at start.
 - **Cross-check against Java** (8 MB corpus, 1 worker, 1 warm-up + 1 repetition): identical dumps in all five modes, and identical sums of query result sizes on stderr in query mode and, since one worker makes them deterministic, in the mixed modes.
 
+**C++** follows the Java conventions above as well; `getrusage` is called directly, time is `std::chrono::steady_clock`. What is specific to C++:
+
+- **Build:** `g++ -O2 -std=c++17 -I _common _common/*.cpp <variant>/*.cpp`, one command, output `build/index`; `build/settings.txt` records the `g++` version and flags. Shared code is a set of headers and sources in `_common/`, the variant includes them through `-I`.
+- **Structure:** `Index` is an abstract class (virtual `add`, `get`, `finish`, `each`, …), as Java's and Go's are interfaces; the runner is a normal function, not a template. A virtual call costs a few ns per document and per query term, the same kind of cost the other two languages pay.
+- **Cost of the standard map, per token:** the index is `std::unordered_map<std::string, PostingList>`, and C++17 has no lookup by `std::string_view` in it (heterogeneous lookup arrived in C++20). The plain standard approach is used: each token (a `string_view` into the document line) is copied into a temporary `std::string`, which is then given to `try_emplace` (one hash, one lookup, the string is moved into the new node only if the term is new, otherwise it is destroyed). So **every token costs one string construction and destruction** (copying its bytes), and a **heap allocation only if the token is longer than 15 bytes**, the small-string limit of libstdc++ (0.07% of the tokens of the 8 MB corpus; 959 of 1,343,362). Queries do not pay this: their terms are already `std::string`s. *Why: no workaround such as a custom hash map or a `string_view`-keyed map, which would change what "the standard map" measures; the cost is part of what the benchmark compares, and the report says so.*
+- **Posting lists** are two `std::vector<int32_t>` (capacity doubles), stored by value in the map nodes; the dump sorts `std::string`s, which compare as unsigned bytes.
+- **Cross-check against Java** (8 MB corpus, 1 worker, 1 warm-up + 1 repetition; `--ops 20000`, `--ops 3000` for the two mixed modes with the larger insert shares): identical dumps in all five modes and identical sums of query result sizes.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
