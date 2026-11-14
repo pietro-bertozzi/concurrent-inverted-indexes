@@ -45,7 +45,9 @@ Run the benchmark:
 ```
 
 Check that every variant builds the right index (dump of the test data in `data/tiny/`
-compared with `cmp`; prints one PASS/FAIL row per variant, exit code 0 only if all pass):
+compared with `cmp`, in every mode the variant declares; mixed modes are compared with the
+variant's own build-mode dump of the same corpus prefix; prints one PASS/FAIL row per
+variant, exit code 0 only if all pass):
 
 ```
 ./bench/check.sh                        uses bench/params-quick.sh
@@ -53,12 +55,14 @@ compared with `cmp`; prints one PASS/FAIL row per variant, exit code 0 only if a
 ```
 
 The run shape and the numeric parameters passed to variants by `check.sh` are the `CHECK_*`
-variables of the params file. Mixed modes are not checked yet (see the insert-budget open
-item in `docs/design.md`).
+variables of the params file (including `CHECK_OPS` and `CHECK_PRELOAD` for query and mixed
+modes).
 
 Before the sweep the runner checks that the data files exist and that the mixed modes fit
 in the corpus (`QUERY_CORPUS_MB`); it records power source, swap and CPU profile in
-`meta.txt` and warns on battery power or swap use. It also warns if a language has no
+`meta.txt` and warns on battery power or swap use. A mixed run inserts exactly
+`floor(ops × insert share / 100)` documents, so it needs exactly `preload` plus that many.
+It also warns if a language has no
 `sequential` variant. Runs that differ only in scaling run once, with `scaling` =
 `strong,weak`. In weak scaling a variant whose `max_threads` is below N still runs the work
 of N with `max_threads` workers; the last column of `results.tsv`, `work_n`, records which
@@ -71,9 +75,11 @@ expected canonical dump) is in `data/tiny/`.
 
 ## Status
 
-Infrastructure phase: skeleton, parameters, runner, test data and preprocessing scripts are
-done; there are no index implementations yet. The runner has been tested only against
-throwaway fake variants. The `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS_MB` values in
+Infrastructure is done (skeleton, parameters, runner, correctness check, test data,
+preprocessing). Current phase: the `sequential` baselines, Java first, then Go, C++ and C
+(`docs/design.md`, section Shared implementation rules). There are no index implementations
+yet; the runner has been tested only against throwaway fake variants. The `OPS_*`,
+`PRELOAD_DOCS` and `QUERY_CORPUS_MB` values in
 `params.sh` are placeholders and will not pass the runner's mixed-sizing check on the real
 corpus until they are sized.
 

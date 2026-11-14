@@ -50,3 +50,8 @@ CHECK_WARMUP=0
 CHECK_PARTITIONS=4
 CHECK_BATCH=2
 CHECK_QUEUE=8
+
+# Operations and preload of the query and mixed checks. data/tiny/ has 6 documents and 7
+# queries; preload + floor(CHECK_OPS x 80 / 100) must fit in the documents.
+CHECK_OPS=7
+CHECK_PRELOAD=1

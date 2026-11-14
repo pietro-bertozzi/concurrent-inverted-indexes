@@ -7,17 +7,26 @@ Performance only. Built to portfolio standard: clean, explainable, reproducible.
 **`docs/design.md` is the source of truth.** Read it before any non-trivial change.
 If something in it looks wrong or incomplete, say so and ask. Never silently deviate.
 
-## Current phase: infrastructure
+## Current phase: sequential baselines
 
-Building the benchmark infrastructure. No index implementations yet; testing happens
-later, against the real implementations.
+Infrastructure is done: skeleton, `bench/params.sh` / `params-pinned.sh` / `params-quick.sh`,
+`bench/run.sh`, `bench/check.sh`, `bench/common.sh`, test data in `data/tiny/`, preprocessing
+in `corpus/`. Now the four `sequential` variants, following `docs/design.md`, section
+Shared implementation rules (splitmix64, exact operation counts, query algorithms,
+build/runtime settings, data structures).
 
-1. Repository skeleton (folders, `.gitignore`, `README.md`)
-2. `bench/params.sh` and `bench/params-quick.sh`
-3. `bench/run.sh`: discovery → `dimensions.tsv` → build → run list → shuffle → run with
-   `timeout`/`taskset` → context columns → `results.tsv`, `logs/`, `meta.txt`
-4. Hand-made test data: tiny corpus, query file, expected canonical dump
-5. Preprocessing: Wikipedia → corpus, prefixes by token count, query generator
+1. Infrastructure updates from the new design: the mixed-sizing check in `run.sh` uses
+   exactly `preload + floor(ops × insert share / 100)`; `check.sh` checks mixed modes against
+   a build-mode reference dump of the corpus prefix; `CHECK_OPS` and `CHECK_PRELOAD` in all
+   three params files
+2. `impl/java/_common/` and `impl/java/sequential/`: all five modes, latencies, dump,
+   measurement columns; first end-to-end test of the runner and `check.sh`
+3. `impl/go/_common/` and `impl/go/sequential/`, with Java as the reference
+4. `impl/cpp/_common/` and `impl/cpp/sequential/`
+5. `impl/c/_common/` (with a hand-written hash map: its design is not decided yet, ask)
+   and `impl/c/sequential/`
+
+`bench/check.sh` must pass for every variant before its step is committed.
 
 ## Rules that must not be broken without asking
 
@@ -33,8 +42,13 @@ later, against the real implementations.
   Column order is fixed; new columns are only added at the end. No averaging anywhere
   except in the (later) Python analysis.
 - **No dependencies** beyond bash and the standard Linux tools actually used: coreutils
-  (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git`.
+  (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git`,
+  plus the language toolchains (`javac`/`java`, `go`, `g++`, `gcc`). Implementations use
+  only their language's standard library: no Maven/Gradle, no third-party modules.
   Ask before adding any tool or package.
+- **Identical work in every language:** splitmix64 from `_common/`, never a built-in
+  generator; exact operation counts and draw order as in design.md. A deviation here
+  silently breaks cross-language comparison.
 - **Numeric parameters** live only in `bench/params*.sh` (plain bash, `source`d).
 
 ## Code style

@@ -369,13 +369,13 @@ shuffle_lines() {
     ' | LC_ALL=C sort -s -n -k1,1 | cut -f2-
 }
 
-# Checks that the mixed runs fit in the corpus: preload + the most inserts a run can make
-# (operations x insert share, rounded up) must not exceed the documents of QUERY_CORPUS_MB.
+# Checks that the mixed runs fit in the corpus: preload + the inserts of a run, exactly
+# floor(operations x insert share / 100), must not exceed the documents of QUERY_CORPUS_MB.
 # Stops with an error if not. $1 is the unshuffled run list.
 check_mixed_sizing() {
     local unshuffled="$1" corpus="$DATA/corpus-${QUERY_CORPUS_MB}mb.txt" docs worst
     worst="$(awk -F'\t' '$2 ~ /^mixed-/ {
-                 split($2, m, "-"); need = $12 + int(($11 * m[3] + 99) / 100)
+                 split($2, m, "-"); need = $12 + int($11 * m[3] / 100)
                  if (need > max) { max = need; line = $2 " ops=" $11 " preload=" $12 } }
              END { if (max > 0) print max "\t" line }' "$unshuffled")"
     [[ -n "$worst" ]] || return 0

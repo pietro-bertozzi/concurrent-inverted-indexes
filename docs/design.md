@@ -1,6 +1,6 @@
 # Concurrent Inverted Index — Benchmark Design
 
-Nov 12, 2026 · Pietro Bertozzi
+Nov 14, 2026 · Pietro Bertozzi
 
 ## Overview
 
@@ -135,8 +135,11 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle (recorded in `meta.txt`) | 10; 1 |
 | `EXPERIMENT` | name of the results folder | full · pinned · quick |
 | `CHECK_REPEAT`, `CHECK_WARMUP`, `CHECK_PARTITIONS`, `CHECK_BATCH`, `CHECK_QUEUE` | run shape and numeric parameters `check.sh` passes to variants (read only by `check.sh`) | 1, 0; 4, 2, 8 |
+| `CHECK_OPS`, `CHECK_PRELOAD` | `--ops` and `--preload` that `check.sh` passes in query and mixed modes; preload + inserts of the largest insert share must fit in the documents of `data/tiny/` | 7, 1 |
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
 | `TIMEOUT` | limit per run, as a number with an optional `s`, `m`, `h` or `d` suffix | 30m to start |
+
+**`CHECK_OPS=7`, `CHECK_PRELOAD=1` (all three params files).** `data/tiny/` has 6 documents and 7 queries, and three wishes cannot all hold: preload + floor(`CHECK_OPS` × 80 / 100) ≤ 6, `CHECK_OPS` > 7, and a preload above 0. With `CHECK_OPS` ≥ 8 the largest share already inserts 6 documents, which forces a preload of 0. *Why 7 and 1: wrap-around of the query file is still exercised, because every worker starts at a random offset and cycles past the end; a preload of 1 keeps the preload path tested (1 + floor(7 × 80 / 100) = 1 + 5 = 6 documents, exactly the corpus).*
 
 The file is plain bash, read with `source`. *Why: no parsing and no dependency; every implementation gets exactly the same values from one place.* Language is not a parameter: the folder says it.
 
@@ -144,7 +147,7 @@ There are three params files with the same variable names: `params.sh` (the main
 
 ## Workload model
 
-Every run has N workers, and each worker performs operations according to the mode: a mode is just the probability that an operation is a query rather than an insert.
+Every run has N workers, and each worker performs operations according to the mode: a mode fixes the share of operations that are queries rather than inserts.
 
 | Mode | Query share | Insert share | Starts from | Typical of |
 | --- | --- | --- | --- | --- |
@@ -154,7 +157,7 @@ Every run has N workers, and each worker performs operations according to the mo
 | `mixed-50-50` | 50% | 50% | preloaded index | balanced |
 | `mixed-20-80` | 20% | 80% | preloaded index | bulk ingestion with occasional queries |
 
-- **Ratios are per operation, not per thread.** *Why: works at any N, including 1 and odd values; it is the method of the standard YCSB benchmark. Splitting threads into readers and writers breaks at small N.*
+- **Ratios are per operation, not per thread, and exact.** A run with `--ops K` performs exactly floor(K × insert share / 100) inserts, split exactly among the workers and mixed with the queries in a seeded random order per worker (section Shared implementation rules, Exact operation counts). *Why: works at any N, including 1 and odd values; it is the method of the standard YCSB benchmark. Splitting threads into readers and writers breaks at small N. Exact counts, unlike a random draw per operation, make the final index of a mixed run deterministic.*
 - **Mixed modes preload part of the corpus, untimed.** Inserts then take the next documents in order. *Why: queries on an empty index would be artificially fast.*
 - **Closed loop:** each worker starts its next operation as soon as the previous one ends. *Why: measures maximum capacity, the right question for comparing strategies. Limitation, stated in the report: closed loop understates tail latency under overload (coordinated omission). An open-loop generator was judged too costly for its benefit.*
 - **Strong and weak scaling** in every mode. Strong: fixed total work, more workers. Weak: work proportional to N. *Why: strong scaling shows speedup; weak scaling shows whether larger problems stay manageable.*
@@ -162,7 +165,7 @@ Every run has N workers, and each worker performs operations according to the mo
   - **Build scales the corpus:** strong scaling runs every size in `CORPORA_MB`; weak scaling runs `CORPUS_BASE_MB` × N.
   - **Query and mixed modes run on one fixed corpus** (`QUERY_CORPUS_MB`) and **scale the operations:** `OPS_TOTAL` in strong scaling, `OPS_PER_WORKER` × N in weak scaling; the runner passes the result as `--ops`. *Why: the work of a query run is the number of operations, and a fixed index keeps what is being queried identical across runs; a second corpus-size axis would multiply the sweep for little insight.*
 - **Operations beyond the query count:** if a run performs more operations than the query file has lines, each worker starts at an offset in the query file derived from the seed and its worker number, and cycles through the file. *Why: reproducible, different slices of the same query distribution per worker, and any `--ops` works with one query file.*
-- **Insert budget:** a mixed run inserts at most ceil(`--ops` × insert share) documents, so preload + budget must not exceed the number of documents of `QUERY_CORPUS_MB`. The runner checks this for every planned mixed run before starting and stops with an error if it fails. *Why: an overnight run must not die in the middle because the corpus ran out.* How a variant guarantees the budget while the operation kind is a probability is part of the variant design (Open items).
+- **Insert budget:** a mixed run inserts exactly I = floor(`--ops` × insert share / 100) documents, so preload + I must not exceed the number of documents of `QUERY_CORPUS_MB`. The runner checks this for every planned mixed run before starting and stops with an error if it fails. *Why: an overnight run must not die in the middle because the corpus ran out.*
 
 ## Data
 
@@ -253,6 +256,81 @@ Every variant's `run.sh` accepts the same arguments and produces the same output
 - **stdout:** TSV data rows only, no header, one row per repetition (warm-ups included), with the measurement columns in the fixed order of section Results; the runner owns the header and treats a wrong row count or field count as a failed run. **stdout** is never anything else (section Results). **stderr:** logs, progress, debug; saved by the runner, never parsed. *Why: a stray print can never corrupt the results.*
 - **Exit code:** 0 on success, non-zero on failure; the runner records failures and continues.
 - Repetitions run inside one process. *Why: Java's JIT needs warm-up within the same process.*
+- **Every repetition starts from scratch with the same seeds:** a fresh empty index, then the build (query mode) or the preload (mixed modes), then the timed phase with the generators re-initialised from `--seed`. *Why: all repetitions do identical work and differ only in timing; otherwise the second mixed repetition would start from an index that already holds the inserts of the first.*
+
+## Shared implementation rules
+
+Every implementation follows the same rules for randomness, operation counts, queries, settings and data structures, so that any difference in the results comes from the concurrency strategy and the language, not from different work.
+
+### Implementation order
+
+- Default language order: **Java, Go, C++, C**.
+- Java `sequential` is implemented first, completely (all five modes, latencies, dump, measurements), together with `impl/java/_common/`. *Why: it is the first end-to-end test of the infrastructure; problems in the contract are cheap to fix while only one implementation exists.*
+- Go, C++ and C `sequential` follow, using the Java version as the reference. `bench/check.sh` must pass for all four.
+
+### Pseudo-random generator (identical in every language)
+
+Every implementation uses **splitmix64**, written in its own `_common/`. No language's built-in generator is used. *Why: "fixed seed" gives the same operations everywhere only if every language computes the same sequence.*
+
+```
+state = state + 0x9E3779B97F4A7C15          (64-bit, wrapping)
+z = state
+z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9    (64-bit, wrapping)
+z = (z ^ (z >> 27)) * 0x94D049BB133111EB    (64-bit, wrapping)
+return z ^ (z >> 31)
+```
+
+- All values are **unsigned 64-bit**; shifts are logical. In Java: `>>>` for shifts, `Long.remainderUnsigned` for modulo.
+- A random index below `m` is `next() mod m` (unsigned). The tiny modulo bias is accepted: it is identical in every language.
+- Worker `i` (0-based) initialises its generator with `state = seed + i`.
+- **Order of draws per worker** (fixed, so all languages match):
+  1. one draw for the starting offset in the query file: `offset = next() mod Q` (Q = number of queries);
+  2. the draws of the operation shuffle (below), in order.
+
+### Exact operation counts
+
+A run has exactly `--ops K` operations, split exactly; ratios are exact, not probabilities.
+
+- Insert share `s` per mode: query 0%, mixed-95-5 5%, mixed-50-50 50%, mixed-20-80 80%.
+- Total inserts: `I = floor(K * s / 100)`. Total queries: `K - I`.
+- Split among N workers (0-based `i`):
+  - operations: `ops_i = floor(K / N) + (i < K mod N ? 1 : 0)`
+  - inserts: `ins_i = floor(I / N) + (i < I mod N ? 1 : 0)`
+  - queries: `ops_i - ins_i`
+- Each worker builds an array of its operation types (`ins_i` inserts, then the queries) and shuffles it with **Fisher–Yates** using its own generator: for `j` from `ops_i - 1` down to `1`: `k = next() mod (j + 1)`; swap `j` and `k`. The array is built **before** timing starts.
+- Inserted documents are taken **in corpus order** after the preloaded part, through a shared counter: whichever worker inserts next takes the next document.
+- Consequence: the final index of a mixed run is always *preload + the next I documents*, independent of timing. Mixed runs are deterministic and can be checked by `bench/check.sh` (section Correctness), and the sizing check knows exactly how many documents a run needs (`preload + I`, section Workload model).
+- Build mode is unchanged: the whole corpus, no `--ops`.
+
+### Queries
+
+- Each worker starts at its `offset` in the query file and **cycles** through it.
+- A query result is the set of document IDs (frequencies are not used).
+- Algorithms, identical in every language:
+  - `SIMPLE t`: the posting list of `t` (empty if the term is absent).
+  - `AND a b`: intersection of the two sorted lists with a **two-pointer merge**.
+  - `OR a b`: union of the two sorted lists with a **two-pointer merge**, without duplicates.
+- Only query operations record a latency; inserts do not.
+- **Results are consumed:** each worker adds up the sizes of its query results; after timing, the total over all workers is written to stderr, one line per repetition. *Why: a result that nothing reads may be removed by the JIT (Java) or the optimizer (`-O2`), and the query timings would then mean nothing. stdout stays unchanged. In query mode the total must be identical across variants and languages (same index, same queries), which is a free cross-check in the logs; in mixed modes it depends on timing.*
+
+### Build and runtime settings (as standard as possible)
+
+| Language | Build | Run |
+| --- | --- | --- |
+| Java | plain `javac`, no Maven/Gradle | `java`, default GC, fixed `-Xmx20g` |
+| Go | plain `go build`, defaults | defaults (`GOMAXPROCS` not changed, but recorded) |
+| C++ | `g++ -O2 -std=c++17` | — |
+| C | `gcc -O2 -std=c17` | — |
+
+- `-Xmx20g` is the only non-default setting. *Why: Java's default maximum heap is ¼ of RAM (~8 GB), which the largest corpus can exceed; 20 GB matches the memory budget.*
+- Go records its `GOMAXPROCS` (`runtime.GOMAXPROCS(0)`) on stderr at start, so it is in the run's log. *Why: the default follows the CPU affinity, so it is 22 unpinned and 12 under `taskset` to the P-cores; the log shows which value each run had.*
+- `build.sh` records the compiler/JVM version and flags in `build/settings.txt` (column `build_settings`, section Results).
+
+### Data structures
+
+- The index is a hash map from term to posting list. Each language uses **its standard hash map**: `HashMap` (Java), built-in `map` (Go), `std::unordered_map` (C++). *Why: the most natural baseline per language; differences between standard maps are part of what the benchmark compares, and the report says so.*
+- C has no standard hash map: its `_common/` gets a simple hand-written one. Its design is decided when C is implemented.
+- Posting lists are growable arrays of (doc ID, frequency).
 
 ## Results
 
@@ -365,9 +443,14 @@ the	0:2 1:2
 ```
 
 - Two variants that built the same index produce byte-identical files, compared with `cmp`. *Why: internally the variants look completely different; only a canonical form makes them comparable.*
-- It works for `build` and `query` modes, and for the **final index** of mixed modes provided the number of inserts is fixed: with fixed seeds, the set of inserted documents is then deterministic (see the open item on the insert budget).
+- It works for `build` and `query` modes, and for the **final index** of mixed modes: inserts are exact counts taken in corpus order, so the final index of a mixed run is always the first preload + I documents, whatever the timing (section Shared implementation rules, Exact operation counts).
 - It is the only check that would catch a variant that is fast because it loses updates, the typical race-condition bug. Worth running at least once per variant before trusting its numbers.
-- **`bench/check.sh [params-file]`** automates it. It discovers the variants like the runner, builds each, and runs it with `--dump` on the hand-made test data (`data/tiny/`: corpus, queries and `expected-dump.tsv`) in `build` and `query` mode (those the variant declares), once for every worker count in `THREADS` of the params file (default `params-quick.sh`) up to the variant's `max_threads`, `CHECK_REPEAT` repetitions and `CHECK_WARMUP` warm-ups each; numeric parameters in `uses` take the values `CHECK_PARTITIONS`, `CHECK_BATCH` and `CHECK_QUEUE` of the params file (all in the params file, like every numeric parameter). The dump is compared with `cmp`. stdout is a TSV with one row per variant (`variant`, `result` = `PASS` or `FAIL`, `detail`), stderr shows progress, the exit code is 0 only if every variant passed. Mixed modes are not checked yet: their final index depends on how many inserts happen, which is not fixed while the operation kind is a random draw (open item: insert budget). With a fixed number of inserts, for example operation types generated up front from the seed, the final index of a mixed run is deterministic and can be checked too. *Why: worker counts above the number of documents and above the number of cores are where lost updates and edge cases show up, and the test corpus is small enough to run them all in seconds.*
+- **`bench/check.sh [params-file]`** automates it. It discovers the variants like the runner, builds each, and runs it with `--dump` on the hand-made test data (`data/tiny/`: corpus, queries and `expected-dump.tsv`) in every mode the variant declares, once for every worker count in `THREADS` of the params file (default `params-quick.sh`) up to the variant's `max_threads`, `CHECK_REPEAT` repetitions and `CHECK_WARMUP` warm-ups each; numeric parameters in `uses` take the values `CHECK_PARTITIONS`, `CHECK_BATCH` and `CHECK_QUEUE` of the params file, and query and mixed modes get `--ops CHECK_OPS`, mixed modes `--preload CHECK_PRELOAD` (all in the params file, like every numeric parameter). The dump is compared with `cmp`:
+  - `build` and `query`: against the hand-made `data/tiny/expected-dump.tsv`.
+  - mixed modes: against a **reference dump** of the same variant. `check.sh` cuts the first preload + I lines of the tiny corpus (`head -n`) into a temporary file, runs the variant in `build` mode with one worker on it, and compares the two dumps. *Why: the build dump is itself checked against the hand-made one, so the mixed check catches lost or duplicated inserts without a hand-made dump per mode and per `CHECK_OPS`.* A variant that declares mixed modes but not `build` fails the mixed check (detail: no build mode for the reference).
+  - Before running, `check.sh` checks that `CHECK_PRELOAD` + I of the largest insert share fits in the documents of the tiny corpus, and stops with an error if not.
+
+  stdout is a TSV with one row per variant (`variant`, `result` = `PASS` or `FAIL`, `detail`), stderr shows progress, the exit code is 0 only if every variant passed. *Why: worker counts above the number of documents and above the number of cores are where lost updates and edge cases show up, and the test corpus is small enough to run them all in seconds.*
 - Query results during mixed runs depend on timing and are not compared. Visibility checks (no half-indexed document seen) belong to the variant design.
 
 ## Benchmark runner
@@ -387,7 +470,7 @@ the	0:2 1:2
 3. Read every `dimensions.tsv`; build the TSV header from the union of the dimension keys. A name collision with a result column stops the runner.
 4. Record the preflight state (power source, swap, CPU profile) in `meta.txt`; warn (do not stop) on battery power.
 5. Run each variant's `build.sh`; a failed build is logged and the variant skipped.
-6. Build the list of runs: variant × mode (from `modes`) × corpus × threads × the parameters in `uses` × pinning × scaling; thread values above `max_threads` are skipped in strong scaling, and become capped runs with `work_n` = N in weak scaling. Build scales the corpus, query and mixed use `QUERY_CORPUS_MB`. Compute `--ops` for each. Merge runs with identical arguments, which differ only in scaling (and `work_n`), into one run with `scaling` `strong,weak`. Check that every data file exists and that the mixed runs fit in the corpus (insert budget); stop with an error if not.
+6. Build the list of runs: variant × mode (from `modes`) × corpus × threads × the parameters in `uses` × pinning × scaling; thread values above `max_threads` are skipped in strong scaling, and become capped runs with `work_n` = N in weak scaling. Build scales the corpus, query and mixed use `QUERY_CORPUS_MB`. Compute `--ops` for each. Merge runs with identical arguments, which differ only in scaling (and `work_n`), into one run with `scaling` `strong,weak`. Check that every data file exists and that the mixed runs fit in the corpus (preload + I documents, section Workload model, Insert budget); stop with an error if not.
 7. **Shuffle the list**, with a pseudo-random order that depends only on `SHUFFLE_SEED` (a small seeded generator inside `run.sh`; the same params file gives the same order, and the seed is in `meta.txt`). *Why: a laptop heats up over a session; random order keeps throttling from always hitting the same variant. A fixed seed keeps the sweep reproducible.*
 8. For each run: optional cool-down pause, then `run.sh` under `timeout`, prefixed with `taskset` when pinned. Check the output, prepend context columns to each stdout row and append to `results.tsv`; save stderr to `logs/`.
 9. A non-zero exit, a timeout, malformed output or a malformed latency file is recorded in `failures.tsv` as a failed run, and the runner continues. When pinned to P-cores, runs with more workers than P-core threads are skipped.
@@ -396,7 +479,7 @@ the	0:2 1:2
 **Rules**
 
 - **Timeouts are generous:** 30 minutes per run to start, tightened later to several times the slowest normal run. *Why: a deadlock would otherwise hang an overnight run forever; standard `timeout` adds no dependency.*
-- **Build and runtime settings are fixed and recorded:** compiler optimization flags in `build.sh`, JVM heap (`-Xmx`) and GC flags in `run.sh`, `GOMAXPROCS` set explicitly. *Why: fairness depends on how code is compiled and run, not just on the code.*
+- **Build and runtime settings are fixed and recorded:** compiler flags in `build.sh`, JVM heap (`-Xmx`) in `run.sh`, `GOMAXPROCS` left at its default and logged (section Shared implementation rules, Build and runtime settings). *Why: fairness depends on how code is compiled and run, not just on the code.*
 - **No dependencies beyond bash and standard Linux tools:** coreutils (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git` (only for the `commit` column; `unknown` without it).
 
 ## Hardware and methodology
@@ -444,12 +527,12 @@ Adding a worker does not add a fixed amount of compute: speedup curves bend wher
 The shared design is complete; what remains are the variant designs and numbers that need the first measurements.
 
 - [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
-- [ ] Visibility check for mixed modes (what a query may observe).
+- [ ] Visibility check for mixed modes (what a query may observe). Includes how a concurrent variant keeps posting lists sorted while they are queried, since `AND` and `OR` merge sorted lists.
 - [x] Preprocessing: markup stripping is settled by using a pre-extracted plain-text source (section Corpus); `corpus/extract.sh` (documents), `corpus/normalize.sh` (tokenization), `corpus/make-prefixes.sh` (prefixes) and `corpus/make-queries.sh` (queries) are implemented.
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
 - [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized. Measured: the 256 MB corpus has 101,131 documents (section Corpus sizes), so the current `PRELOAD_DOCS=50000` fits, with about 51,000 documents left for the insert budget.
-- [ ] Insert budget in mixed modes: how a variant guarantees at most ceil(`--ops` × insert share) inserts although the operation kind is a probability (for example a per-worker pattern or quota instead of random draws, or operation types generated up front from the seed). A fixed insert count would also let `check.sh` check mixed modes.
-- [ ] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS`.
+- [x] Insert budget in mixed modes: exact operation counts, shuffled per worker with the shared generator (section Shared implementation rules); `check.sh` now checks mixed modes too.
+- [x] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS` (section Shared implementation rules, Build and runtime settings).
 - [ ] Tighten `TIMEOUT` after the first full runs.
 - [x] Decide how `results/<experiment>` folders are named: each params file sets `EXPERIMENT` (`full`, `pinned`, `quick`), so dev results land in ignored folders.
