@@ -24,6 +24,17 @@ int64_t since(Clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t).count();
 }
 
+// Mean cost in ns of one Clock::now(): 1,000,000 back-to-back readings (docs/design.md, Query latencies).
+int64_t clockCostNs() {
+    const int n = 1000000;
+    int64_t sink = 0;
+    auto start = Clock::now();
+    for (int i = 0; i < n; i++) sink += Clock::now().time_since_epoch().count();
+    int64_t total = since(start);
+    if (sink == 42) std::cerr << "";   // the readings are consumed, so they cannot be removed
+    return total / n;
+}
+
 // Reads the input file: one string per line (document ID = position).
 std::vector<std::string> load(const std::string& file) {
     std::ifstream in(file);
@@ -155,6 +166,7 @@ void execute(const Args& a, int maxThreads, const std::function<std::unique_ptr<
     if (!build) queries = loadQueries(a.queries);
     std::cerr << "c++ g++ " << __VERSION__ << ", mode " << a.mode << ", " << a.threads << " worker(s), "
               << a.warmup << " warm-up + " << a.repeat << " repetitions\n";
+    std::cerr << "clock reading cost: " << clockCostNs() << " ns (mean of 1000000 back-to-back readings)\n";
     std::ofstream latencies;
     if (!build) {
         latencies.open(a.latencies, std::ios::binary);

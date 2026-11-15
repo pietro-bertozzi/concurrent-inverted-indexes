@@ -77,10 +77,10 @@ expected canonical dump) is in `data/tiny/`.
 
 Infrastructure is done (skeleton, parameters, runner, correctness check, test data,
 preprocessing). Current phase: the `sequential` baselines, Java first, then Go, C++ and C
-(`docs/design.md`, section Shared implementation rules). `impl/java/sequential` and
-`impl/go/sequential` and `impl/cpp/sequential` are done and pass `bench/check.sh`; C is still
-to come. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
-compiles the sources from a copy in `build/src/`), C++ needs `g++`. The `OPS_*`,
+(`docs/design.md`, section Shared implementation rules). All four
+`sequential` variants (`impl/java`, `impl/go`, `impl/cpp`, `impl/c`) are done and pass
+`bench/check.sh`. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
+compiles the sources from a copy in `build/src/`), C++ needs `g++`, C needs `gcc` (its hash map is our own, see `docs/design.md`). The `OPS_*`,
 `PRELOAD_DOCS` and `QUERY_CORPUS_MB` values in
 `params.sh` are placeholders and will not pass the runner's mixed-sizing check on the real
 corpus until they are sized.

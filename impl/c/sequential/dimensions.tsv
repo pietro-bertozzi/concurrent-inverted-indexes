@@ -1,0 +1,6 @@
+partitioning	single
+writer	direct
+write_timing	immediate
+uses	none
+modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
+max_threads	1

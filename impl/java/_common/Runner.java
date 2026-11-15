@@ -37,6 +37,17 @@ final class Runner {
         }
     }
 
+    /** Mean cost in ns of one System.nanoTime() call: 1,000,000 back-to-back readings (docs/design.md, Query latencies). */
+    private static long clockCostNs() {
+        final int n = 1_000_000;
+        long sink = 0;
+        long start = System.nanoTime();
+        for (int i = 0; i < n; i++) sink += System.nanoTime();
+        long total = System.nanoTime() - start;
+        if (sink == 42) System.err.print("");   // the readings are consumed, so they cannot be removed
+        return total / n;
+    }
+
     /** Runs all repetitions of {@code a}. */
     private static void execute(Args a, int maxThreads, Supplier<Index> factory, String[] uses) throws IOException {
         if (a.threads > maxThreads) {
@@ -52,6 +63,7 @@ final class Runner {
         int share = Args.insertShare(a.mode);
         System.err.println("java " + System.getProperty("java.version") + ", mode " + a.mode + ", "
                 + a.threads + " worker(s), " + a.warmup + " warm-up + " + a.repeat + " repetitions");
+        System.err.println("clock reading cost: " + clockCostNs() + " ns (mean of 1000000 back-to-back readings)");
         BufferedWriter latencies = build ? null
                 : Files.newBufferedWriter(Path.of(a.latencies), StandardCharsets.UTF_8);
         try {

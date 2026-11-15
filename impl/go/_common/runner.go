@@ -37,6 +37,22 @@ func Run(argv []string, maxThreads int, factory func() Index, uses ...string) {
 }
 
 // execute runs all repetitions of a.
+// clockCostNs returns the mean cost in ns of one time.Now() call: 1,000,000 back-to-back
+// readings (docs/design.md, Query latencies).
+func clockCostNs() int64 {
+	const n = 1000000
+	var sink int64
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		sink += time.Now().UnixNano()
+	}
+	total := time.Since(start).Nanoseconds()
+	if sink == 42 { // the readings are consumed, so they cannot be removed
+		fmt.Fprint(os.Stderr, "")
+	}
+	return total / n
+}
+
 func execute(a *Args, maxThreads int, factory func() Index, uses []string) error {
 	if a.Threads > maxThreads {
 		return fmt.Errorf("this variant supports at most %d worker(s), got --threads %d", maxThreads, a.Threads)
@@ -57,6 +73,7 @@ func execute(a *Args, maxThreads int, factory func() Index, uses []string) error
 	}
 	fmt.Fprintf(os.Stderr, "go %s, GOMAXPROCS %d, mode %s, %d worker(s), %d warm-up + %d repetitions\n",
 		strings.TrimPrefix(runtime.Version(), "go"), runtime.GOMAXPROCS(0), a.Mode, a.Threads, a.Warmup, a.Repeat)
+	fmt.Fprintf(os.Stderr, "clock reading cost: %d ns (mean of 1000000 back-to-back readings)\n", clockCostNs())
 	if !build {
 		f, err := os.Create(a.Latencies)
 		if err != nil {
