@@ -1,4 +1,4 @@
-// C sequential variant: one worker, one hand-written hash map, no locks.
+// C sequential variant: one worker thread, one hand-written hash map, no locks.
 #include "runner.h"
 #include "sequential_index.h"
 

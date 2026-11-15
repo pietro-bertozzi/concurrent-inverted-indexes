@@ -104,5 +104,8 @@ Args args_parse(int argc, char **argv) {
     }
     if (mixed) a.preload = integer(&a, OPT_PRELOAD, 0);
     a.dump = a.values[OPT_DUMP];
+    if (a.values[OPT_PARTITIONS] != NULL) a.partitions = integer(&a, OPT_PARTITIONS, 1);
+    if (a.values[OPT_BATCH] != NULL) a.batch = integer(&a, OPT_BATCH, 1);
+    if (a.values[OPT_QUEUE] != NULL) a.queue = integer(&a, OPT_QUEUE, 1);
     return a;
 }

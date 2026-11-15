@@ -14,6 +14,7 @@
 #include "queries.h"
 #include "queryengine.h"
 #include "util.h"
+#include "workers.h"
 
 // The current time of the monotonic clock in ns.
 static int64_t now_ns(void) {
@@ -89,9 +90,44 @@ static void write_latencies(FILE *out, int rep, int warmup, const int64_t *laten
     for (int i = 0; i < count; i++) fprintf(out, "%d\t%d\t%lld\n", rep, warmup, (long long)latency[i]);
 }
 
+// What the workers of the timed query or mixed phase share.
+typedef struct {
+    Worker **workers;
+    const OpPlan *plans;
+    const Queries *queries;
+    const Docs *docs;
+    int preload;
+    int64_t **latency;     // latency[w] has plans[w].queries entries
+    int64_t *results;      // results[w]: sum of the query result sizes of worker w
+    atomic_int next_doc;   // the shared insert counter
+} PlanJob;
+
+// One worker's share of the timed phase: follows its plan, timing every query with two clock
+// readings around it. An insert takes the next document from the shared counter (whichever
+// worker inserts next takes the next document).
+static void plan_body(void *context, int w) {
+    PlanJob *job = context;
+    Worker *me = job->workers[w];
+    const OpPlan *plan = &job->plans[w];
+    int64_t total = 0;
+    int cursor = plan->query_offset, li = 0;
+    for (int i = 0; i < plan->count; i++) {
+        if (plan->types[i] == OP_QUERY) {
+            int64_t start = now_ns();
+            total += me->query(me, job->queries, cursor);
+            job->latency[w][li++] = now_ns() - start;
+            if (++cursor == job->queries->count) cursor = 0;
+        } else {
+            int d = atomic_fetch_add(&job->next_doc, 1);
+            me->add(me, d, job->docs->line[d], job->docs->length[d]);
+        }
+    }
+    job->results[w] = total;
+}
+
 // One repetition: load, index (build / preload), run, finish; prints its row.
 static void repetition(const Args *a, int rep, int warmup, int last, const Queries *queries,
-                       Index *(*factory)(void), FILE *latencies) {
+                       Index *(*factory)(const Args *), FILE *latencies) {
     int build = strcmp(a->mode, "build") == 0, mixed = strncmp(a->mode, "mixed-", 6) == 0;
     int share = args_insert_share(a->mode);
     ProcSnapshot before = proc_snapshot();
@@ -100,24 +136,33 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
     Docs docs = load(a->input);
     int64_t load_ns = now_ns() - t;
 
-    // The plan (the operation order) is made before timing starts.
-    OpPlan plan = {NULL, 0, 0, 0, 0};
+    // The plans (the operation order of every worker) are made before timing starts.
+    int n = a->threads;
+    OpPlan *plans = NULL;
+    int ops_query = 0, ops_insert = 0;
     if (!build) {
         int inserts = opplan_total_inserts(a->ops, share);
         if ((int64_t)a->preload + inserts > docs.count) {
             fatal("mixed run needs %lld documents (preload %d + %d inserts) but %s has %d",
                   (long long)a->preload + inserts, a->preload, inserts, a->input, docs.count);
         }
-        plan = opplan_make(a->ops, share, a->threads, 0, a->seed, queries->count);   // worker 0 (the only one)
+        plans = xmalloc((size_t)n * sizeof(OpPlan));
+        for (int w = 0; w < n; w++) {
+            plans[w] = opplan_make(a->ops, share, n, w, a->seed, queries->count);
+            ops_query += plans[w].queries;
+            ops_insert += plans[w].inserts;
+        }
     }
 
-    Index *index = factory();
+    Index *index = factory(a);
+    Worker **workers = xmalloc((size_t)n * sizeof(Worker *));   // one handle per worker, made before timing
+    for (int w = 0; w < n; w++) workers[w] = index->worker(index);
     int64_t preload_ns = 0, build_ns = 0, run_ns = 0, finalize_ns = 0, result_total = 0;
-    int64_t *latency = NULL;
+    int64_t **latency = NULL;
 
     if (build || strcmp(a->mode, "query") == 0) {
         t = now_ns();
-        for (int d = 0; d < docs.count; d++) index->add(index, d, docs.line[d], docs.length[d]);
+        workers_index(workers, n, docs.line, docs.length, 0, docs.count);
         build_ns = now_ns() - t;
         if (!build) {                       // queries need the finished index
             t = now_ns();
@@ -126,7 +171,7 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
         }
     } else {
         t = now_ns();
-        for (int d = 0; d < a->preload; d++) index->add(index, d, docs.line[d], docs.length[d]);
+        workers_index(workers, n, docs.line, docs.length, 0, a->preload);
         preload_ns = now_ns() - t;
     }
     if (build) {
@@ -136,32 +181,21 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
     }
 
     if (!build) {
-        latency = xmalloc((size_t)plan.queries * sizeof(int64_t));
-        QueryEngine engine;
-        queryengine_init(&engine);
-        atomic_int next_doc = a->preload;   // the shared insert counter
-        int cursor = plan.query_offset;
-        int li = 0;
+        latency = xmalloc((size_t)n * sizeof(int64_t *));
+        for (int w = 0; w < n; w++) latency[w] = xmalloc((size_t)plans[w].queries * sizeof(int64_t) + 1);
+        PlanJob job = {workers, plans, queries, &docs, a->preload, latency, xcalloc((size_t)n, sizeof(int64_t)), 0};
+        atomic_init(&job.next_doc, a->preload);
         t = now_ns();
-        for (int i = 0; i < plan.count; i++) {
-            if (plan.types[i] == OP_QUERY) {
-                int64_t start = now_ns();
-                result_total += queryengine_run(&engine, index, queries, cursor);
-                latency[li++] = now_ns() - start;
-                if (++cursor == queries->count) cursor = 0;
-            } else {
-                int d = atomic_fetch_add(&next_doc, 1);
-                index->add(index, d, docs.line[d], docs.length[d]);
-            }
-        }
+        workers_run(n, plan_body, &job);
         run_ns = now_ns() - t;
+        for (int w = 0; w < n; w++) result_total += job.results[w];
+        free(job.results);
         if (mixed) {
             t = now_ns();
             index->finish(index);
             finalize_ns = now_ns() - t;
         }
         fprintf(stderr, "rep %d: sum of query result sizes = %lld\n", rep, (long long)result_total);
-        queryengine_destroy(&engine);
     }
 
     ProcSnapshot used = proc_minus(proc_snapshot(), before);
@@ -170,20 +204,27 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
     char row[512];
     snprintf(row, sizeof row, "%d\t%d\t%lld\t%lld\t%lld\t%lld\t%lld\t%d\t%d\t%d\t%d\t%lld\t%lld\t%lld\t%lld\t%lld\t%lld",
              rep, w, (long long)load_ns, (long long)preload_ns, (long long)build_ns, (long long)run_ns,
-             (long long)finalize_ns, build ? 0 : plan.queries, build ? 0 : plan.inserts, index->docs(index),
+             (long long)finalize_ns, ops_query, ops_insert, index->docs(index),
              index->terms(index), (long long)index->postings(index), (long long)peak, (long long)used.user_ns,
              (long long)used.sys_ns, (long long)used.ctx_vol, (long long)used.ctx_invol);
 
     // After the timers have stopped: the latencies, the row, the dump.
-    if (!build) write_latencies(latencies, rep, w, latency, plan.queries);
+    if (!build) for (int k = 0; k < n; k++) write_latencies(latencies, rep, w, latency[k], plans[k].queries);
     puts(row);
     fflush(stdout);
     if (a->dump != NULL && last) dump_write(index, a->dump);
 
     // Nothing of this repetition stays reachable, so repetitions do not accumulate memory.
     index->destroy(index);
-    free(latency);
-    opplan_free(&plan);
+    free(workers);
+    if (!build) {
+        for (int k = 0; k < n; k++) {
+            free(latency[k]);
+            opplan_free(&plans[k]);
+        }
+        free(latency);
+        free(plans);
+    }
     docs_free(&docs);
 }
 
@@ -194,15 +235,15 @@ static int in_uses(const char *name, const char *const *uses, int uses_count) {
 }
 
 // Runs all repetitions of a.
-static void execute(const Args *a, int max_threads, Index *(*factory)(void), const char *const *uses, int uses_count) {
+static void execute(const Args *a, int max_threads, Index *(*factory)(const Args *), const char *const *uses, int uses_count) {
     if (a->threads > max_threads) {
         fatal("this variant supports at most %d worker(s), got --threads %d", max_threads, a->threads);
     }
     for (int i = 0; i < 3; i++) {
         static const char *const NAMES[] = {"partitions", "batch", "queue"};
-        if (args_has(a, NAMES[i]) && !in_uses(NAMES[i], uses, uses_count)) {
-            fatal("option --%s is not used by this variant", NAMES[i]);
-        }
+        int used = in_uses(NAMES[i], uses, uses_count);
+        if (args_has(a, NAMES[i]) && !used) fatal("option --%s is not used by this variant", NAMES[i]);
+        if (!args_has(a, NAMES[i]) && used) fatal("missing required option --%s for this variant", NAMES[i]);
     }
     int build = strcmp(a->mode, "build") == 0;
     Queries queries;
@@ -226,7 +267,7 @@ static void execute(const Args *a, int max_threads, Index *(*factory)(void), con
     }
 }
 
-int run_variant(int argc, char **argv, int max_threads, Index *(*factory)(void),
+int run_variant(int argc, char **argv, int max_threads, Index *(*factory)(const Args *),
                 const char *const *uses, int uses_count) {
     Args a = args_parse(argc, argv);
     execute(&a, max_threads, factory, uses, uses_count);

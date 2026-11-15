@@ -3,19 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "partitionhash.h"
 #include "util.h"
 
 #define INITIAL_CAPACITY 1024
-
-// FNV-1a, 64 bit: start at the offset basis, then for every byte xor it in and multiply by the prime.
-static uint64_t fnv1a(const char *key, size_t length) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (size_t i = 0; i < length; i++) {
-        h ^= (unsigned char)key[i];
-        h *= 0x100000001b3ULL;
-    }
-    return h;
-}
 
 void map_init(TermMap *map) {
     map->capacity = INITIAL_CAPACITY;

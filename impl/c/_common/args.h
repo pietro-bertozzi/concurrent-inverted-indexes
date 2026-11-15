@@ -18,6 +18,7 @@ typedef struct {
     uint64_t seed;           // query and mixed modes
     const char *latencies;   // query and mixed modes
     const char *dump;        // optional, NULL if absent
+    int partitions, batch, queue;   // numeric parameters; 0 if absent (a variant checks the ones it uses)
     const char *values[OPT_COUNT];   // raw text of every option given, NULL if absent
 } Args;
 

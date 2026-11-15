@@ -19,3 +19,9 @@ void postings_free(PostingList *list);
 
 // Appends a posting; the caller appends in increasing document ID order.
 void postings_append(PostingList *list, int doc_id, int freq);
+
+// Inserts a posting in its correct place, keeping the list sorted (docs/design.md, section
+// Concurrent variants). With dynamic handout documents arrive nearly in order, so the place is
+// almost always the end (a plain append) or a few slots before it. The document ID must not
+// be in the list yet.
+void postings_insert(PostingList *list, int doc_id, int freq);

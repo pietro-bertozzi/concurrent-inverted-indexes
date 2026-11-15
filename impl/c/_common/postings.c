@@ -1,6 +1,7 @@
 #include "postings.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "util.h"
 
@@ -22,4 +23,17 @@ void postings_append(PostingList *list, int doc_id, int freq) {
     list->docs[list->size] = (int32_t)doc_id;
     list->freqs[list->size] = (int32_t)freq;
     list->size++;
+}
+
+void postings_insert(PostingList *list, int doc_id, int freq) {
+    size_t pos = list->size;
+    while (pos > 0 && list->docs[pos - 1] > doc_id) pos--;   // walk back from the end
+    postings_append(list, doc_id, freq);                      // grows the arrays if needed
+    if (pos < list->size - 1) {                               // not the end: shift the tail one slot up
+        size_t tail = list->size - 1 - pos;
+        memmove(list->docs + pos + 1, list->docs + pos, tail * sizeof(int32_t));
+        memmove(list->freqs + pos + 1, list->freqs + pos, tail * sizeof(int32_t));
+        list->docs[pos] = (int32_t)doc_id;
+        list->freqs[pos] = (int32_t)freq;
+    }
 }
