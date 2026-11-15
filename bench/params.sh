@@ -20,12 +20,13 @@ THREADS_WEAK="1 2 4 8 16"
 # Files are data/corpus-<MB>mb.txt. Only build mode scales the corpus: strong scaling
 # runs on every size in CORPORA_MB, weak scaling on CORPUS_BASE_MB * N (so every such
 # size must also be listed in CORPORA_MB).
-CORPUS_BASE_MB=256
-CORPORA_MB="256 512 1024 2048 4096"
+CORPUS_BASE_MB=128
+CORPORA_MB="128 256 512 1024 2048"
 
 # The one corpus (MB, must be listed in CORPORA_MB) that query and mixed modes run on:
-# they scale the number of operations instead. Placeholder, to be sized.
-QUERY_CORPUS_MB=256
+# they scale the number of operations instead. Sized in docs/design.md, section Sizing
+# measurements: 203,212 documents, enough for PRELOAD_DOCS plus the largest insert budget.
+QUERY_CORPUS_MB=512
 
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 16 64"
@@ -38,15 +39,18 @@ QUEUE="1024"        # queue capacity: placeholder, to be sized (design.md, Open 
 PINNING="none"
 PCORES_CPUS="0-11"  # /sys/devices/cpu_core/cpus on the benchmark machine
 
-# Operations (query and mixed modes). Placeholders, to be sized (design.md, Open items).
+# Operations (query and mixed modes), sized in design.md, section Sizing measurements.
 # Strong scaling: OPS_TOTAL operations in total. Weak: OPS_PER_WORKER * N.
-OPS_TOTAL=1000000
-OPS_PER_WORKER=100000
+# mixed-20-80 at the largest value needs PRELOAD_DOCS + 80% of the operations in documents:
+# 100,000 + 80,000 (strong) or 100,000 + 64,000 (weak, N = 16) <= 203,212 (QUERY_CORPUS_MB).
+OPS_TOTAL=100000
+OPS_PER_WORKER=5000
 
-# Documents indexed before timing starts (mixed modes). Placeholder, to be sized.
-PRELOAD_DOCS=50000
+# Documents indexed before timing starts (mixed modes). The queries are drawn from these
+# same documents (corpus/make-queries.sh), so every query term is in the index at the start.
+PRELOAD_DOCS=100000
 
-# Number of queries in data/queries.txt (corpus/make-queries.sh). Placeholder, to be sized.
+# Number of queries in data/queries.txt (corpus/make-queries.sh).
 QUERY_COUNT=100000
 
 # Base seed for query selection; each worker derives its own.
@@ -59,8 +63,10 @@ CORPUS_SEED=2015
 REPEAT=10
 WARMUP=1
 
-# Limit per run, in the format of `timeout` (30m = 30 minutes).
-TIMEOUT=30m
+# Limit per run, in the format of `timeout` (60m = 60 minutes): about 9x the slowest
+# sequential run (a 2048 MB build, 11 repetitions, about 7 minutes; design.md, Sizing
+# measurements); to be tightened after the first full runs.
+TIMEOUT=60m
 
 # Pause in seconds before every run, to let the laptop cool down.
 COOLDOWN=10

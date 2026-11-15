@@ -14,10 +14,11 @@ SCALING="strong"
 THREADS="1 2 4 6 8 12"
 THREADS_WEAK="1 2 4 8"
 
-# Build runs on two corpus sizes; query and mixed on QUERY_CORPUS_MB, as in params.sh.
+# Build runs on three corpus sizes (QUERY_CORPUS_MB must be one of them); query and mixed
+# on QUERY_CORPUS_MB, as in params.sh. Strong scaling only, so the base is just the smallest size.
 CORPUS_BASE_MB=256
-CORPORA_MB="256 1024"
-QUERY_CORPUS_MB=256
+CORPORA_MB="256 512 1024"
+QUERY_CORPUS_MB=512
 
 # One value each: the control is about the thread count, not about these parameters.
 PARTITIONS="16"
@@ -27,9 +28,9 @@ QUEUE="1024"
 PINNING="pcores"
 PCORES_CPUS="0-11"
 
-OPS_TOTAL=1000000
-OPS_PER_WORKER=100000
-PRELOAD_DOCS=50000
+OPS_TOTAL=100000
+OPS_PER_WORKER=5000
+PRELOAD_DOCS=100000
 QUERY_COUNT=100000
 SEED=42
 
@@ -38,7 +39,7 @@ CORPUS_SEED=2015
 
 REPEAT=10
 WARMUP=1
-TIMEOUT=30m
+TIMEOUT=60m
 COOLDOWN=10
 SHUFFLE_SEED=1
 

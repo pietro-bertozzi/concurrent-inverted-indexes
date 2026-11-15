@@ -122,15 +122,15 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | --- | --- | --- |
 | `MODES` | workload mode | build query mixed-95-5 mixed-50-50 mixed-20-80 |
 | `THREADS`, `THREADS_WEAK` | number of workers N (strong / weak scaling) | 1 2 4 6 8 12 14 16 22 / 1 2 4 8 16 |
-| `CORPUS_BASE_MB`, `CORPORA_MB` | corpus prefixes in MB of text, scaled by build mode only; weak scaling uses base × N | 256 · 512 · … · 4096 |
-| `QUERY_CORPUS_MB` | the one corpus (MB, one of `CORPORA_MB`) that query and mixed modes run on | 256, to be sized |
+| `CORPUS_BASE_MB`, `CORPORA_MB` | corpus prefixes in MB of text, scaled by build mode only; weak scaling uses base × N | 128 · 256 · … · 2048 |
+| `QUERY_CORPUS_MB` | the one corpus (MB, one of `CORPORA_MB`) that query and mixed modes run on | 512 |
 | `SCALING` | how total work is set | strong · weak |
 | `PARTITIONS` | partitions, if used | 4 16 64 |
 | `BATCH` | postings per lock or message, if used | 1 64 1024 |
 | `QUEUE` | queue capacity, if used | to be sized |
 | `PINNING`, `PCORES_CPUS` | CPU placement (`none` in `params.sh`, `pcores` in `params-pinned.sh`); CPUs used by `pcores` | none · pcores; 0-11 |
-| `OPS_TOTAL`, `OPS_PER_WORKER` | operations in a run: strong / weak | to be sized |
-| `PRELOAD_DOCS`, `QUERY_COUNT`, `SEED` | documents preloaded in mixed modes; lines in the query file; base seed | to be sized; to be sized; 42 |
+| `OPS_TOTAL`, `OPS_PER_WORKER` | operations in a run: strong / weak | 100,000 / 5,000 |
+| `PRELOAD_DOCS`, `QUERY_COUNT`, `SEED` | documents preloaded in mixed modes; lines in the query file; base seed | 100,000; 100,000; 42 |
 | `CORPUS_SEED` | seed of the one-time document shuffle (`corpus/shuffle.sh`); used by preprocessing only, not by the runner | 2015 |
 | `COOLDOWN`, `SHUFFLE_SEED` | pause before each run in s; seed of the run-order shuffle (recorded in `meta.txt`) | 10; 1 |
 | `EXPERIMENT` | name of the results folder | full · pinned · quick |
@@ -191,20 +191,21 @@ the dog chased the cat
 
 ### Corpus sizes
 
-- Sizes are **prefixes** of the same corpus (the first 256 MB, 512 MB, …), doubled by **token count**, not bytes or documents. *Why: same kind of text at every size; tokens measure the actual work, while document lengths vary widely.*
+- Sizes are **prefixes** of the same corpus (the first 128 MB, 256 MB, …), doubled by **token count**, not bytes or documents. *Why: same kind of text at every size; tokens measure the actual work, while document lengths vary widely.*
 - **Measured on the real corpus** (shuffled, `make-prefixes.sh bench/params.sh`; 4,508,255 documents and 11.35 GB in total after `extract.sh` and `normalize.sh`, 43 lines without tokens dropped, none with invalid UTF-8):
 
 | `CORPORA_MB` | tokens | bytes | documents |
 |---|---|---|---|
-| 256 | 43,208,725 | 256,000,428 | 101,131 |
-| 512 | 86,421,312 | 511,841,093 | 203,358 |
-| 1024 | 172,835,091 | 1,023,690,679 | 407,183 |
-| 2048 | 345,670,416 | 2,047,197,789 | 814,314 |
-| 4096 | 691,344,296 | 4,094,054,423 | 1,624,536 |
+| 128 | 21,586,249 | 128,001,297 | 50,930 |
+| 256 | 43,173,888 | 255,794,024 | 101,062 |
+| 512 | 86,345,215 | 511,381,951 | 203,212 |
+| 1024 | 172,690,058 | 1,022,842,023 | 406,913 |
+| 2048 | 345,380,722 | 2,045,486,778 | 813,625 |
 
-  The number of documents is now proportional to the size (about 2.5 KB and 430 tokens per document at every size). Preprocessing the whole dump takes about 16 minutes (`extract.sh` + `normalize.sh`), shuffling 1 minute, cutting the prefixes 17 s, generating 100,000 queries 44 s. Before the shuffle (dump order) the 256 MB prefix had only 15,005 documents.
+  The base is **128 MB** (`CORPUS_BASE_MB=128`): its token count T = 21,586,249 is the first whole documents that reach 128 MB, and every other size is the first whole documents that reach T × size / 128 tokens. The largest size is 2048 MB, which is also the weak-scaling size at 16 workers (128 × 16). *Why 128 and not 256 MB: with a 256 MB base, weak scaling at 16 workers needs 4096 MB, where Java (about 18 GB, extrapolated) and Go (14.3 GB, measured) do not fit the 20 GB budget with any margin once concurrent variants add their own memory (section Memory budget, Sizing measurements).* An earlier cut with base 256 MB (sizes 256 to 4096 MB, e.g. 101,131 documents at 256 MB and 1,624,536 documents at 4096 MB) was used for the sizing measurements; the sizes 256 to 2048 MB were cut again from the same shuffled corpus, and differ from the earlier ones by less than 0.2% in size.
+  The number of documents is now proportional to the size (about 2.5 KB and 430 tokens per document at every size). Preprocessing the whole dump takes about 16 minutes (`extract.sh` + `normalize.sh`), shuffling 1 minute, cutting the prefixes 10 s, generating 100,000 queries 51 s. Before the shuffle (dump order) the 256 MB prefix had only 15,005 documents.
 - Vocabulary grows slower than text (Heaps' law): twice the text gives fewer than twice the distinct terms. Accepted and noted in the report.
-- Weak-scaling sizes of build mode are multiples of a base unit (about 256 MB at 1 worker, to be confirmed). Every corpus size the runner uses (`CORPORA_MB`, base × N, `QUERY_CORPUS_MB`) must be a prefix listed in `CORPORA_MB`; `make-prefixes.sh` cuts exactly those.
+- Weak-scaling sizes of build mode are multiples of a base unit (128 MB at 1 worker, up to 2048 MB at 16). Every corpus size the runner uses (`CORPORA_MB`, base × N, `QUERY_CORPUS_MB`) must be a prefix listed in `CORPORA_MB`; `make-prefixes.sh` cuts exactly those.
 
 ### Postings
 
@@ -224,7 +225,7 @@ OR mat dog
 ```
 
 - *Why: terms are always lowercase, so an uppercase word can only be an operator.*
-- **Generation:** terms are drawn from the preloaded part of the corpus by picking random word occurrences; the operator is chosen at random; fixed seed. *Why: queries hit real documents; frequent words appear often, as in real searches (picking from the vocabulary would give mostly rare words); every variant gets identical queries.*
+- **Generation:** terms are drawn from the preloaded part of the corpus (the first `PRELOAD_DOCS` = 100,000 documents; every prefix with at least that many documents gives the same file, `corpus/make-queries.sh` is run on the `QUERY_CORPUS_MB` prefix) by picking random word occurrences; the operator is chosen at random; fixed seed. *Why: queries hit real documents; frequent words appear often, as in real searches (picking from the vocabulary would give mostly rare words); every variant gets identical queries.*
 
 ## CLI contract
 
@@ -555,7 +556,7 @@ Adding a worker does not add a fixed amount of compute: speedup curves bend wher
 
 - About **20 GB** for the benchmark; **swap must never be used.** *Why: swapping would dominate the measurements.*
 - **Measured** (section Sizing measurements): the peak of a build run is the input text (the whole file is read into memory, 1× its size) plus the index. The index alone is about **1.0× the text for C and C++, 2.5× for Go and 3.5× for Java** (2048 MB corpus; Java is 5.8× on the smallest corpus because of the JVM's fixed overhead). Per posting, peak RSS is about 28 bytes for C and C++, 48 for Go and 61 for Java (2048 MB). The first estimate (1.5× compact, up to 5×) was too high for C/C++ and about right for Java.
-- Largest corpus prefix ≈ **4 GB** of text; weak-scaling base ≈ **256 MB**. Extrapolated peak at 4096 MB: about 18 GB for Java (not run: the guard stopped it), 14.3 GB for Go, 8.1–8.3 GB for C++ and C. Concurrent variants need more than the sequential ones (per-worker buffers, locks, queues), so **Java and Go at 4096 MB do not fit the 20 GB budget with any margin**; see the proposal in Sizing measurements.
+- Largest corpus prefix = **2 GB** of text (2048 MB); weak-scaling base = **128 MB** (≈ 21.6 million tokens). Measured peaks of the sequential variants at 2048 MB: Java 9.1 GB, Go 7.1 GB, C++ 4.0 GB, C 4.2 GB. Concurrent variants need more (per-worker buffers, locks, queues), so 2048 MB leaves a margin of about 2× below the 20 GB budget for the worst language. At 4096 MB Java (about 18 GB extrapolated) and Go (14.3 GB) would not fit, which is why that size was dropped (section Corpus sizes).
 - Mixed modes need enough documents after the preloaded part for all inserts; sized together with `--ops` and checked by the runner before the sweep (section Workload model).
 
 ### Sizing measurements (sequential baselines)
@@ -613,18 +614,18 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 
 **Constraint that decides the sizes:** a mixed run needs `PRELOAD_DOCS + floor(ops × insert share / 100)` documents of `QUERY_CORPUS_MB` (section Workload model), and the largest insert share is 80%. The 256 MB corpus has only 101,131 documents, so with the placeholders (`OPS_TOTAL=1000000`) `mixed-20-80` would need 850,000. A run with 100,000 operations needs 80,000 inserts plus the preload.
 
-**Proposal (not applied: `params.sh` unchanged until approved):**
+**Decision (applied in `params.sh`, `params-pinned.sh` takes the same values):**
 
-| parameter | placeholder | proposed | reasoning |
+| parameter | placeholder | value | reasoning |
 |---|---|---|---|
-| `QUERY_CORPUS_MB` | 256 | **512** | 203,358 documents, enough for preload + inserts (below); the index is still small (1.1–2.9 GB at the build peak). The 256 MB corpus would force a preload of at most 21,000 documents. |
+| `QUERY_CORPUS_MB` | 256 | **512** | 203,212 documents (after the re-cut to base 128 MB), enough for preload + inserts (below); the index is still small (1.1–2.9 GB at the build peak). The 256 MB corpus would force a preload of at most 21,000 documents. |
 | `PRELOAD_DOCS` | 50,000 | **100,000** | Half of the 512 MB corpus: the mixed runs start from a real index (about 1 GB), and the preload leaves 103,358 documents for inserts. |
-| `OPS_TOTAL` | 1,000,000 | **100,000** | Strong scaling. At 1 worker: about 4–5 s per repetition at 256 MB, about 8–11 s at 512 MB (extrapolated: lists twice as long, to be confirmed by a first run), so 11 repetitions take about 2 minutes. `mixed-20-80` needs 80,000 + 100,000 = 180,000 ≤ 203,358 documents. At 22 workers a worker has 4,500 operations (about 0.2–0.5 s per repetition), still far above the clock cost. Latency files: about 10 MB per run instead of 100 MB. |
-| `OPS_PER_WORKER` | 100,000 | **5,000** | Weak scaling: 16 workers do 80,000 operations, at most 64,000 inserts + 100,000 preload = 164,000 ≤ 203,358; same work per worker as strong scaling at about 20 workers. 10,000 would need 228,000 documents at 16 workers. |
+| `OPS_TOTAL` | 1,000,000 | **100,000** | Strong scaling. At 1 worker: about 4–5 s per repetition at 256 MB, about 8–11 s at 512 MB (extrapolated: lists twice as long, to be confirmed by a first run), so 11 repetitions take about 2 minutes. `mixed-20-80` needs 80,000 + 100,000 = 180,000 ≤ 203,212 documents. At 22 workers a worker has 4,500 operations (about 0.2–0.5 s per repetition), still far above the clock cost. Latency files: about 10 MB per run instead of 100 MB. |
+| `OPS_PER_WORKER` | 100,000 | **5,000** | Weak scaling: 16 workers do 80,000 operations, at most 64,000 inserts + 100,000 preload = 164,000 ≤ 203,212; same work per worker as strong scaling at about 20 workers. 10,000 would need 228,000 documents at 16 workers. |
 | `QUERY_COUNT` | 100,000 | **100,000** (unchanged) | Enough that no worker wraps around the query file (largest share: 100,000 operations at 1 worker, exactly once); the file is 1.45 MB. |
-| `TIMEOUT` | 30m | **60m** (for now) | The slowest sequential run is C++ at 4096 MB: 73 s per build, about 14 minutes for 11 repetitions; Java at 4096 MB would be about the same. A concurrent variant at 1 worker can be slower than a sequential one (locks), so the limit is about 4× the slowest measured run; to be tightened after the first full runs (open items). |
+| `TIMEOUT` | 30m | **60m** (for now) | With 2048 MB as the largest corpus the slowest sequential run is Java or C++ building it: about 36 s per build, about 7 minutes for 11 repetitions. 60m is about 9× that: generous on purpose, because a concurrent variant at 1 worker can be slower than a sequential one (locks) and a hung run is only detected at the limit. To be tightened after the first full runs (open items). |
 
-**Decision needed (changes the design, so not proposed as a plain number):** weak scaling at 16 workers uses a 4096 MB corpus, where Java is predicted at about 18 GB and Go measured at 14.3 GB (both for a sequential index; the concurrent ones use more), over the 20 GB budget with no margin. Two ways out: (a) `CORPUS_BASE_MB=128`, `CORPORA_MB="128 256 512 1024 2048"` (strong scaling on those, weak 128 × N up to 2048 at N=16; needs a 128 MB prefix, and the memory peaks are Java 9.1 GB, Go 7.1 GB at 2048 MB); (b) keep the sizes and drop `THREADS_WEAK` 16 or 4096 MB for Java and Go, which the discovered-variants rule does not allow without a per-language list. Recommended: (a).
+**Decision on the weak-scaling base (taken):** weak scaling at 16 workers used a 4096 MB corpus, where Java (about 18 GB) and Go (14.3 GB) do not fit the budget. Option (a) was chosen: `CORPUS_BASE_MB=128`, `CORPORA_MB="128 256 512 1024 2048"`, so 16 workers are 2048 MB (Java 9.1 GB, Go 7.1 GB). The invalid Go run at 4096 MB and the missing Java run at 4096 MB are therefore not needed any more. The query timings above were measured on the 256 MB corpus of the earlier cut and the proposal extrapolates them to 512 MB (lists twice as long, about 8–11 s per repetition at 1 worker); the first full run confirms or corrects it.
 
 ### Run conditions
 
@@ -640,8 +641,8 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Visibility check for mixed modes (what a query may observe). Includes how a concurrent variant keeps posting lists sorted while they are queried, since `AND` and `OR` merge sorted lists.
 - [x] Preprocessing: markup stripping is settled by using a pre-extracted plain-text source (section Corpus); `corpus/extract.sh` (documents), `corpus/normalize.sh` (tokenization), `corpus/make-prefixes.sh` (prefixes) and `corpus/make-queries.sh` (queries) are implemented.
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
-- [x] Confirm corpus sizes and the memory budget from measured bytes per posting (section Sizing measurements). Open from it: Java 4096 MB not run, Go 4096 MB to repeat without swap, and the decision on the weak-scaling base.
-- [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized. Measured: the 256 MB corpus has 101,131 documents (section Corpus sizes), so the current `PRELOAD_DOCS=50000` fits, with about 51,000 documents left for the insert budget. Query timings and a proposal for all five values are in section Sizing measurements, **waiting for approval** before `params.sh` changes.
+- [x] Confirm corpus sizes and the memory budget from measured bytes per posting (section Sizing measurements). Result: base 128 MB, largest size 2048 MB (4096 MB dropped: Java and Go would not fit).
+- [x] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable (section Sizing measurements): `QUERY_CORPUS_MB=512`, `PRELOAD_DOCS=100000`, `OPS_TOTAL=100000`, `OPS_PER_WORKER=5000`, `QUERY_COUNT=100000`. The runner's mixed-sizing check passes on the real corpus for all three params files. To confirm with the first full run: query cost on the 512 MB corpus (extrapolated).
 - [x] Insert budget in mixed modes: exact operation counts, shuffled per worker with the shared generator (section Shared implementation rules); `check.sh` now checks mixed modes too.
 - [x] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS` (section Shared implementation rules, Build and runtime settings).
 - [ ] Tighten `TIMEOUT` after the first full runs.

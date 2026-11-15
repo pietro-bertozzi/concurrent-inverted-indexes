@@ -33,7 +33,7 @@ md5sum data/raw/wikipedia.txt.gz                                 # c1fefd53b7379
 zcat data/raw/wikipedia.txt.gz | corpus/extract.sh | corpus/normalize.sh > data/raw/corpus-dump-order.txt
 corpus/shuffle.sh bench/params.sh < data/raw/corpus-dump-order.txt > data/raw/corpus.txt   # seeded shuffle
 corpus/make-prefixes.sh bench/params.sh data/raw/corpus.txt      # data/corpus-<MB>mb.txt
-corpus/make-queries.sh bench/params.sh data/corpus-256mb.txt     # data/queries.txt
+corpus/make-queries.sh bench/params.sh data/corpus-512mb.txt     # data/queries.txt, from the first PRELOAD_DOCS documents
 ```
 
 Run the benchmark:
@@ -80,10 +80,9 @@ preprocessing). Current phase: the `sequential` baselines, Java first, then Go, 
 (`docs/design.md`, section Shared implementation rules). All four
 `sequential` variants (`impl/java`, `impl/go`, `impl/cpp`, `impl/c`) are done and pass
 `bench/check.sh`. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
-compiles the sources from a copy in `build/src/`), C++ needs `g++`, C needs `gcc` (its hash map is our own, see `docs/design.md`). The `OPS_*`,
-`PRELOAD_DOCS` and `QUERY_CORPUS_MB` values in
-`params.sh` are placeholders and will not pass the runner's mixed-sizing check on the real
-corpus until they are sized.
+compiles the sources from a copy in `build/src/`), C++ needs `g++`, C needs `gcc` (its hash map is our own, see `docs/design.md`). The corpus
+sizes (128 to 2048 MB) and the `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS_MB` values of the
+params files come from the sizing measurements (`docs/design.md`, section Sizing measurements).
 
 ## License
 
