@@ -376,6 +376,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Java.** `PrivateMergeIndex`; the piles are `HashMap<String, PostingList>`, the merge runs on `Workers.run`. **Cross-check** (8 MB corpus): dumps identical to `sequential` in build and query mode at 1, 8 and 22 workers; the query sum equals the other variants' at the same worker count (2,335,481 at 8).
 
+**Go.** `PrivateMergeIndex`; the piles are `map[string]*PostingList`, the merge runs on `RunWorkers`; a term is cloned (`strings.Clone`) when it becomes a new key in a private pile, as in the other variants. **Cross-check against Java:** identical dumps in build and query mode at 1, 8 and 22 workers, and the same query sums (2,335,481 at 8 workers, 2,326,650 at 22).
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
