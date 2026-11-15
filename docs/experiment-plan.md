@@ -10,7 +10,7 @@ It complements `docs/design.md`, which fixes the shared infrastructure (workload
 
 **Time limit.** Every experiment (one params file per question) must take about one hour, builds included, and at most 70 minutes estimated (docs/design.md, Run conditions). The experiments below are therefore small, targeted sweeps, not one big sweep; `bench/params-q1.sh` is the first.
 
-Status: draft, to iterate. Round 1 is implemented and measured (Q1 done, results below); `private-merge` is implemented in all four languages; Q2 has not been run yet. The other variants of the plan are not implemented.
+Status, 2026-11-15: round 1 (`global-lock`, `partition-lock`) is implemented in all four languages and measured (Q1 results below); `private-merge` (round 2) is implemented, its experiment Q2 not yet run. The other variants of the plan are not implemented. The plan keeps evolving: the repo copy, `docs/experiment-plan.md`, is merged with the exported one after each round.
 
 ## The problem space
 
@@ -357,6 +357,42 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 
 ### Q3. Locks or messages?
 
+**The strategy in short.** In `partition-lock` every partition has a lock, and anyone may write into it, taking turns. In `partition-writers` every partition has one owner, the only thread that may write into it; the others send it their postings as messages. Q3 asks which way of protecting shared data costs less.
+
+Picture the dictionary split into sections (A–C, D–F, …):
+
+- **Locks:** whoever has a word for D–F waits until the D–F notebook is free, then writes it in.
+- **Messages:** each section has a person in charge. Whoever has a word for D–F writes a note, drops it in that person's mailbox and goes straight back to work. From time to time the person in charge empties the mailbox and copies the notes into the notebook.
+
+The two prices compared:
+
+|  | Locks | Messages |
+| --- | --- | --- |
+| Waiting | in the queue for the notebook | none, until the mailbox is full |
+| Cost per write | taking the lock | writing the note (a copy) and dropping it in the mailbox, which itself must be protected |
+| Who does the writing | anyone | only the owner: every posting of "the" is written by one thread |
+| Full mailbox | — | the sender stops (backpressure) |
+
+How the experiment answers:
+
+- **Same conditions.** `partition-writers` against `partition-lock` with the same P and batch, so the only difference is locks against messages.
+- **Knob 1, the batch.** Batch 1 sends one note per posting; batch 1024 sends one note carrying 1024 postings. As in Q1, it sets how often the fixed cost is paid, here the cost of one mailbox operation.
+- **Knob 2, the mailbox capacity (`QUEUE`).** A small mailbox stops senders often; a large one rarely, at the cost of memory.
+- **Cross-checks.** Voluntary context switches count how often a thread waited (full or empty mailbox); CPU utilization shows how much of the time was useful work.
+
+How the result is read:
+
+| If we see… | It means… |
+| --- | --- |
+| messages lose at batch 1 but tie or win at large batches | each message is expensive, but amortized it works |
+| messages win at every batch | removing lock contention matters more than the mailbox cost |
+| messages always lose | copying and managing mailboxes costs more than the locks |
+| a large mailbox clearly beats a small one | the bottleneck is backpressure: senders wait for the owner |
+
+**The link with Q1.** Q1 showed that the real problem is serialization (contention), not the cost of taking a lock. Messages remove contention on the locks, but not the serialization: the owner of the partition holding "the" still writes all its postings alone. So the most interesting prediction is that messages do not break `partition-lock`'s ceiling: the bottleneck moves from the lock to the owner.
+
+In one sentence: same configuration, locks against messages; the batch sets what each message costs, the mailbox how much senders wait, and the hot partition limits both.
+
 **Fundamentals.**
 
 - **Owner computes.** Instead of protecting shared data with locks, give each partition one owner thread; nobody else touches it. Other workers send it messages. No lock on the index is ever needed.
@@ -379,6 +415,41 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 
 ### Q4. What does a hybrid CPU do to scaling?
 
+**The strategy in short.** The Q1 curves bend: they grow well up to 4–6 workers, then slow down. Q4 asks whose fault each bend is: the software (locks, contention) or the hardware. The 155H does not have identical cores:
+
+| Core | Count | Speed |
+| --- | --- | --- |
+| P-core | 6 (12 threads with hyperthreading) | fast |
+| E-core | 8 | about half |
+| LP E-core | 2 | slower still |
+
+Picture a moving crew of 6 professionals, 8 apprentices and 2 interns. The seventh person is not one more professional but an apprentice. And if everyone must carry the same number of boxes, the move ends when the intern finishes.
+
+The two suspects for every bend in a curve:
+
+- **Software:** threads get in each other's way (locks, waiting). The bend depends on the variant.
+- **Hardware:** the extra cores are slower or shared (hyperthreading). The bend sits at the worker count where a core type runs out: 6, 12, 14 or 16.
+
+Three tools, each removing one suspect:
+
+1. **The pinned control experiment.** The same runs, with threads forced onto the P-cores only (`taskset`, up to 12 workers). The E-cores leave the game: a bend present unpinned that disappears pinned belongs to the E-cores.
+2. **A lock-free reference.** `private-merge` (Q2) has no contention while building, so its bends are hardware only. If `partition-lock` bends where `private-merge` bends, it is the hardware; if it bends earlier, it is the software.
+3. **Static against dynamic.** `private-merge-static` splits the documents into equal parts up front; `private-merge` hands them out dynamically. It is the same variant except for how work is divided. With identical cores the two should match; if static loses, it is because the slow cores finish last and everyone waits for them.
+
+How the result is read:
+
+| If we see… | It means… |
+| --- | --- |
+| a bend at 6 workers, both unpinned and pinned | hyperthreading: from the 7th worker, two threads share a core |
+| a bend at 12–16 workers only unpinned | the E-cores |
+| `partition-lock` bends before `private-merge` | the software (contention) |
+| static far worse than dynamic from 7 workers up, but equal pinned | core heterogeneity: equal shares of work penalize the fast cores |
+| static equal to dynamic even unpinned | the operating system moves threads to the fast cores on its own |
+
+**What Q1 already shows.** `global-lock` collapses at any worker count: that is software. `partition-lock` at P = 64 keeps rising slowly up to 16–22 workers, the typical shape of slower cores being added, but only the pinned control can say so with certainty.
+
+In one sentence: three tools, each removing one suspect: pinning removes the E-cores, `private-merge` removes the locks, and static against dynamic shows what ignoring different core speeds costs.
+
 **Fundamentals.**
 
 - **Not all cores are equal.** The 155H has 6 P-cores (with hyperthreading: 12 threads), 8 E-cores and 2 LP E-cores. An E-core does roughly half the work of a P-core per second, an LP E-core less.
@@ -399,6 +470,43 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 **What would surprise us.** No difference between static and dynamic would mean the Linux scheduler moves threads to fast cores well enough on its own.
 
 ### Q5. Reads against writes: does a read/write lock pay off?
+
+**The strategy in short.** With a plain lock, two queries reading the same partition wait for each other, although reading together breaks nothing: only a writer needs to be alone. A read/write lock lets all readers in together and keeps others out only while someone writes. Q5 asks whether that pays off, and when.
+
+Picture a library with one reference book:
+
+- **Plain lock:** one person at a time in the book's room, whether to read it or to correct a page.
+- **Read/write lock:** many may read together. Whoever must correct a page waits for the room to empty, and nobody enters while they write.
+
+The two prices compared:
+
+|  | Plain lock | Read/write lock |
+| --- | --- | --- |
+| Two readers at once | wait for each other (needlessly) | read in parallel |
+| Cost of each entry | low | higher: the lock counts its readers, and that counter is shared |
+| A writer | waits its turn | waits for every reader to leave |
+| Risk | — | starvation: with a steady stream of readers, a writer may wait long |
+
+**The link with Q1.** Our queries look for frequent words, so they often land in the hot partition, the one holding "the". Q1 showed that the real problem is contention; the read/write lock attacks exactly that, but for readers only. And each query holds its lock long (about 50 µs, returning about 26,000 documents), so the extra entry cost is small by comparison.
+
+How the experiment answers:
+
+- **Same conditions.** `partition-rwlock` against `partition-lock`, same P and batch; the only difference is the kind of lock.
+- **Knob 1, the reader/writer mix.** Query mode (100% reads), then mixed-95-5, 50-50 and 20-80: it shows up to which point the read/write lock pays.
+- **Knob 2, the worker count.** More readers, more potential gain.
+- **Two measures.** Throughput (operations per second, from `run_ns`) and query latency (p50 and p99, from the latency files). The p99 shows whether some queries are stuck for long behind a writer.
+- **Two languages.** Java (`ReentrantReadWriteLock`) and C (`pthread_rwlock_t`) have different rules about who goes first when readers and writers wait together: glibc favours readers, Java tries not to keep writers waiting too long. Comparing them shows the effect of those rules.
+
+How the result is read:
+
+| If we see… | It means… |
+| --- | --- |
+| the read/write lock wins in query and 95-5, ties at 50-50, loses at 20-80 | it pays when readers dominate; with many writes the extra cost does not pay back |
+| it loses even in query mode | the reader counter costs more than reading together gains |
+| throughput improves but p99 gets worse | better on average, but some queries are stuck behind writers |
+| C and Java behave differently at 95-5 | the precedence rules between readers and writers matter |
+
+In one sentence: same configuration, plain lock against read/write lock; the reader/writer mix says how far it pays, the p99 latency says who pays for it.
 
 **Fundamentals.**
 
