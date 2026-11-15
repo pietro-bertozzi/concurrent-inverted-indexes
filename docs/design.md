@@ -700,14 +700,14 @@ Other worker counts are interpolated on a log scale between the calibrated ones,
 
 **Open point: the runner runs strong scaling on every size of `CORPORA_MB`.** Weak scaling needs 256, 512 and 1024 MB in that list, so strong scaling also runs on them (4 sizes), not only on 128 MB as the plan says. With the file as it is the estimate is **127 minutes**, over the 70-minute limit, so the file is **not accepted and not run** until a decision. Running strong scaling on 128 MB only would give 104 runs and about **34 minutes**, but the runner cannot say that today (it would need a new parameter, for example a separate list of sizes for strong scaling).
 
-**Calibration** (1 warm-up + 2 repetitions per run, 128 MB, mean of load + build + finalize in seconds; `partition-lock` is P = 64, batch 64; `private-merge` is build / finalize):
+**Calibration** (1 warm-up + 2 repetitions per run, 128 MB, mean of load + build + finalize in seconds; `partition-lock` is P = 64, batch 64; `private-merge` is load + build, then finalize):
 
 | Language | `sequential` | `partition-lock` 1 / 8 / 22 workers | `private-merge` 1 / 8 / 22 workers |
 | --- | --- | --- | --- |
-| java | 1.95 | 2.58 / 0.79 / 0.72 | 2.67 / 0.65+0.13 / 0.65+0.14 (build+finalize, load included in the build) |
-| go | 1.31 | 2.50 / 0.55 / 0.43 | 2.31 / 0.49+0.15 / 0.34+0.19 |
-| c++ | 1.87 | 2.25 / 0.48 / 0.37 | 2.11 / 0.45+0.28 / 0.30+0.31 |
-| c | 1.14 | 1.17 / 0.34 / 0.28 | 1.04 / 0.27+0.31 / 0.21+0.31 |
+| java | 1.95 | 2.58 / 0.79 / 0.72 | 2.61+0.06 / 0.78+0.13 / 0.65+0.14 |
+| go | 1.30 | 2.50 / 0.55 / 0.42 | 2.31+0.28 / 0.48+0.14 / 0.34+0.18 |
+| c++ | 1.87 | 2.25 / 0.48 / 0.37 | 2.11+0.15 / 0.45+0.28 / 0.30+0.31 |
+| c | 1.14 | 1.17 / 0.34 / 0.28 | 1.04+0.14 / 0.27+0.31 / 0.21+0.31 |
 
 Other worker counts are interpolated on a log scale; times scale linearly with the corpus (times 1.05 for the superlinear growth seen at 1024 MB); a run is 6 repetitions + 0.5 s start + the cool-down. Estimate: 127 minutes for the 272 runs (`private-merge` 62, `partition-lock` 55, `sequential` 11; java 40, go 33, c++ 33, c 22). **Peak memory** of Java `private-merge` on the 1024 MB corpus with 8 workers (1 warm-up + 5 repetitions, default `-Xmx20g`): 12.2 GB (10.9 GB in a shorter run); with 22 workers 11.8 GB; Java `partition-lock` 7.2 GB and `sequential` 4.7 GB on the same corpus. So it stays under the 20 GB heap and under the 31 GB of the machine, but not far under: it is about 1.7 times the shared variants, as the plan predicts. The calibration also shows the merge is not small: it takes 0.13-0.31 s against a build of 0.2-0.65 s on 128 MB (the plan predicts 10-25% of the total); this is a calibration with two repetitions, not a measurement.
 
