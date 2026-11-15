@@ -26,9 +26,9 @@ static int64_t now_ns(void) {
 // Mean cost in ns of one clock reading: 1,000,000 back-to-back readings (docs/design.md, Query latencies).
 static int64_t clock_cost_ns(void) {
     const int n = 1000000;
-    volatile int64_t sink = 0;   // the readings are consumed, so they cannot be removed
+    volatile uint64_t sink = 0;   // the readings are consumed, so they cannot be removed; unsigned, so the sum may wrap
     int64_t start = now_ns();
-    for (int i = 0; i < n; i++) sink += now_ns();
+    for (int i = 0; i < n; i++) sink += (uint64_t)now_ns();
     return (now_ns() - start) / n;
 }
 

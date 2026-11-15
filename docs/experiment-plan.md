@@ -10,7 +10,7 @@ It complements `docs/design.md`, which fixes the shared infrastructure (workload
 
 **Time limit.** Every experiment (one params file per question) must take about one hour, builds included, and at most 70 minutes estimated (docs/design.md, Run conditions). The experiments below are therefore small, targeted sweeps, not one big sweep; `bench/params-q1.sh` is the first.
 
-Status: draft, to iterate. Nothing here is implemented yet; the four `sequential` baselines are done and sized.
+Status: draft, to iterate. Round 1 is implemented and measured (Q1 done, results below); `private-merge` is implemented in all four languages; Q2 has not been run yet. The other variants of the plan are not implemented.
 
 ## The problem space
 

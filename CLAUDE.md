@@ -9,19 +9,20 @@ the shared infrastructure and rules; `experiment-plan.md` fixes the questions an
 concurrent variants. Read both before any non-trivial change. If something in them looks
 wrong or incomplete, say so and ask. Never silently deviate.
 
-## Current phase: Round 1: global-lock and partition-lock
+## Current phase: Round 2: private-merge, partition-writers
 
-The infrastructure and the four `sequential` baselines are done and swept
-(`results/full/`). Now round 1 of `docs/experiment-plan.md` (section The implementations:
-Rules every variant follows, How each variant works, Order of work):
+Round 1 (`global-lock`, `partition-lock`) is implemented and measured (Q1, `results/q1/`).
+Round 2 of `docs/experiment-plan.md` (section The implementations: Rules every variant
+follows, How each variant works, Order of work):
 
-- `global-lock` (`uses` batch) and `partition-lock` (`uses` partitions, batch), all five
-  modes, in the order Java, Go, C++, C.
-- Code shared by variants (partition hash, sorted insertion, the worker loop with the
-  dynamic counter) goes in each language's `_common/`.
+- `private-merge` (`uses` none, modes build and query) is implemented in all four languages.
+  Q2 has not been run yet.
+- `partition-writers` (`uses` partitions, batch, queue; build and query) is next, in the
+  order Java, Go, C++, C.
+- Code shared by variants goes in each language's `_common/`.
 - `bench/check.sh` must pass for each new variant at every worker count before its
   language is committed. One commit and push per language.
-- Rounds 2 and 3 (`private-merge`, `partition-writers`, extras) come later.
+- Round 3 (extras) comes later.
 
 ## Rules that must not be broken without asking
 

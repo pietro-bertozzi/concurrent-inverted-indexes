@@ -28,9 +28,9 @@ int64_t since(Clock::time_point t) {
 // Mean cost in ns of one Clock::now(): 1,000,000 back-to-back readings (docs/design.md, Query latencies).
 int64_t clockCostNs() {
     const int n = 1000000;
-    int64_t sink = 0;
+    uint64_t sink = 0;   // unsigned, so the sum of the readings may wrap
     auto start = Clock::now();
-    for (int i = 0; i < n; i++) sink += Clock::now().time_since_epoch().count();
+    for (int i = 0; i < n; i++) sink += static_cast<uint64_t>(Clock::now().time_since_epoch().count());
     int64_t total = since(start);
     if (sink == 42) std::cerr << "";   // the readings are consumed, so they cannot be removed
     return total / n;
