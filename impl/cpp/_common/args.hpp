@@ -17,6 +17,7 @@ struct Args {
     uint64_t seed = 0;         // query and mixed modes
     std::string latencies;     // query and mixed modes
     std::string dump;          // optional, empty if absent
+    int partitions = 0, batch = 0, queue = 0;   // numeric parameters; 0 if absent (a variant checks the ones it uses)
     std::map<std::string, std::string> values;
 
     // True if the command line carries the numeric parameter name (partitions, batch, queue).

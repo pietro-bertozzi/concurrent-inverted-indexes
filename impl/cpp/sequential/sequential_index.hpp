@@ -6,10 +6,16 @@
 #include <unordered_map>
 
 #include "index.hpp"
+#include "queryengine.hpp"
 #include "tokenizer.hpp"
 
-class SequentialIndex : public Index {
+class SequentialIndex : public Index, public Worker {
 public:
+    // Only one worker exists: the index is its own handle.
+    Worker* worker() override { return this; }
+
+    int query(const Queries& q, int i) override { return engine_.run(*this, q, i); }
+
     void add(int docId, const std::string& doc) override {
         Tokenizer tokens(doc);
         while (tokens.next()) {
@@ -47,4 +53,5 @@ private:
     std::unordered_map<std::string, PostingList> map_;
     int docs_ = 0;
     int64_t postings_ = 0;
+    QueryEngine engine_;
 };

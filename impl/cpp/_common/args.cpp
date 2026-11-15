@@ -88,5 +88,8 @@ Args parseArgs(const std::vector<std::string>& argv) {
     }
     if (mixed) a.preload = integer(a, "preload", 0);
     if (a.has("dump")) a.dump = a.values.at("dump");
+    if (a.has("partitions")) a.partitions = integer(a, "partitions", 1);
+    if (a.has("batch")) a.batch = integer(a, "batch", 1);
+    if (a.has("queue")) a.queue = integer(a, "queue", 1);
     return a;
 }

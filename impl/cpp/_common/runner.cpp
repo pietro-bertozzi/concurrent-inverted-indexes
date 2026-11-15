@@ -14,6 +14,7 @@
 #include "proc.hpp"
 #include "queries.hpp"
 #include "queryengine.hpp"
+#include "workers.hpp"
 
 namespace {
 
@@ -55,9 +56,31 @@ void writeLatencies(std::ofstream& out, int rep, int warmup, const std::vector<i
     out.write(text.data(), static_cast<std::streamsize>(text.size()));
 }
 
+// One worker's share of the timed phase: follows its plan, timing every query with two clock
+// readings around it. An insert takes the next document from the shared counter (whichever
+// worker inserts next takes the next document). Returns the sum of the query result sizes.
+int64_t runPlan(Worker& me, const OpPlan& plan, const Queries& queries, const std::vector<std::string>& docs,
+                std::atomic<int>& nextDoc, std::vector<int64_t>& latency) {
+    int64_t total = 0;
+    int cursor = plan.queryOffset;
+    size_t li = 0;
+    for (uint8_t type : plan.types) {
+        if (type == OpPlan::QUERY) {
+            auto start = Clock::now();
+            total += me.query(queries, cursor);
+            latency[li++] = since(start);
+            if (++cursor == queries.size()) cursor = 0;
+        } else {
+            int d = nextDoc.fetch_add(1);
+            me.add(d, docs[d]);
+        }
+    }
+    return total;
+}
+
 // One repetition: load, index (build / preload), run, finish; prints its row.
 void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* queries,
-                const std::function<std::unique_ptr<Index>()>& factory, std::ofstream* latencies) {
+                const IndexFactory& factory, std::ofstream* latencies) {
     bool build = a.mode == "build", mixed = a.mode.rfind("mixed-", 0) == 0;
     int share = insertShare(a.mode);
     ProcSnapshot before = procSnapshot();
@@ -68,8 +91,10 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
     if (docs.empty()) throw std::runtime_error(a.input + " has no documents");
     int docCount = static_cast<int>(docs.size());
 
-    // The plan (the operation order) is made before timing starts.
-    OpPlan plan;
+    // The plans (the operation order of every worker) are made before timing starts.
+    int n = a.threads;
+    std::vector<OpPlan> plans;
+    int64_t opsQuery = 0, opsInsert = 0;
     if (!build) {
         int inserts = OpPlan::totalInserts(a.ops, share);
         if (static_cast<int64_t>(a.preload) + inserts > docCount) {
@@ -77,16 +102,22 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
                                      " documents (preload " + std::to_string(a.preload) + " + " + std::to_string(inserts) +
                                      " inserts) but " + a.input + " has " + std::to_string(docCount));
         }
-        plan = OpPlan::make(a.ops, share, a.threads, 0, a.seed, queries->size());   // worker 0 (the only one)
+        for (int w = 0; w < n; w++) {
+            plans.push_back(OpPlan::make(a.ops, share, n, w, a.seed, queries->size()));
+            opsQuery += plans[w].queries;
+            opsInsert += plans[w].inserts;
+        }
     }
 
-    std::unique_ptr<Index> index = factory();
+    std::unique_ptr<Index> index = factory(a);
+    std::vector<Worker*> workers;   // one handle per worker, made before timing
+    for (int w = 0; w < n; w++) workers.push_back(index->worker());
     int64_t preloadNs = 0, buildNs = 0, runNs = 0, finalizeNs = 0, resultTotal = 0;
-    std::vector<int64_t> latency;
+    std::vector<std::vector<int64_t>> latency;
 
     if (build || a.mode == "query") {
         t = Clock::now();
-        for (int d = 0; d < docCount; d++) index->add(d, docs[d]);
+        indexDocs(workers, docs, 0, docCount);
         buildNs = since(t);
         if (!build) {                       // queries need the finished index
             t = Clock::now();
@@ -95,7 +126,7 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
         }
     } else {
         t = Clock::now();
-        for (int d = 0; d < a.preload; d++) index->add(d, docs[d]);
+        indexDocs(workers, docs, 0, a.preload);
         preloadNs = since(t);
     }
     if (build) {
@@ -105,24 +136,14 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
     }
 
     if (!build) {
-        latency.resize(plan.queries);
-        QueryEngine engine;
+        latency.resize(n);
+        for (int w = 0; w < n; w++) latency[w].resize(plans[w].queries);
+        std::vector<int64_t> results(n, 0);
         std::atomic<int> nextDoc(a.preload);   // the shared insert counter
-        int cursor = plan.queryOffset;
-        size_t li = 0;
         t = Clock::now();
-        for (uint8_t type : plan.types) {
-            if (type == OpPlan::QUERY) {
-                auto start = Clock::now();
-                resultTotal += engine.run(*index, *queries, cursor);
-                latency[li++] = since(start);
-                if (++cursor == queries->size()) cursor = 0;
-            } else {
-                int d = nextDoc.fetch_add(1);
-                index->add(d, docs[d]);
-            }
-        }
+        runWorkers(n, [&](int w) { results[w] = runPlan(*workers[w], plans[w], *queries, docs, nextDoc, latency[w]); });
         runNs = since(t);
+        for (int64_t r : results) resultTotal += r;
         if (mixed) {
             t = Clock::now();
             index->finish();
@@ -136,7 +157,7 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
     int w = warmup ? 1 : 0;
     std::string row;
     for (int64_t v : {int64_t(rep), int64_t(w), loadNs, preloadNs, buildNs, runNs, finalizeNs,
-                      int64_t(build ? 0 : plan.queries), int64_t(build ? 0 : plan.inserts),
+                      opsQuery, opsInsert,
                       int64_t(index->docs()), int64_t(index->terms()), index->postings(), peak,
                       used.userNs, used.sysNs, used.ctxVol, used.ctxInvol}) {
         if (!row.empty()) row += '\t';
@@ -144,22 +165,22 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
     }
 
     // After the timers have stopped: the latencies, the row, the dump.
-    if (!build) writeLatencies(*latencies, rep, w, latency);
+    for (const auto& l : latency) writeLatencies(*latencies, rep, w, l);
     std::cout << row << "\n" << std::flush;
     if (!a.dump.empty() && last) writeDump(*index, a.dump);
 }
 
 // Runs all repetitions of a.
-void execute(const Args& a, int maxThreads, const std::function<std::unique_ptr<Index>()>& factory,
+void execute(const Args& a, int maxThreads, const IndexFactory& factory,
              const std::vector<std::string>& uses) {
     if (a.threads > maxThreads) {
         throw std::runtime_error("this variant supports at most " + std::to_string(maxThreads) +
                                  " worker(s), got --threads " + std::to_string(a.threads));
     }
     for (const char* name : {"partitions", "batch", "queue"}) {
-        if (a.has(name) && std::find(uses.begin(), uses.end(), name) == uses.end()) {
-            throw std::runtime_error(std::string("option --") + name + " is not used by this variant");
-        }
+        bool used = std::find(uses.begin(), uses.end(), name) != uses.end();
+        if (a.has(name) && !used) throw std::runtime_error(std::string("option --") + name + " is not used by this variant");
+        if (!a.has(name) && used) throw std::runtime_error(std::string("missing required option --") + name + " for this variant");
     }
     bool build = a.mode == "build";
     Queries queries;
@@ -185,7 +206,7 @@ void execute(const Args& a, int maxThreads, const std::function<std::unique_ptr<
 
 }  // namespace
 
-int runVariant(int argc, char** argv, int maxThreads, const std::function<std::unique_ptr<Index>()>& factory,
+int runVariant(int argc, char** argv, int maxThreads, const IndexFactory& factory,
                const std::vector<std::string>& uses) {
     try {
         execute(parseArgs(std::vector<std::string>(argv + 1, argv + argc)), maxThreads, factory, uses);
