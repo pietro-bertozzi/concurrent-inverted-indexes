@@ -554,9 +554,77 @@ Adding a worker does not add a fixed amount of compute: speedup curves bend wher
 ### Memory budget
 
 - About **20 GB** for the benchmark; **swap must never be used.** *Why: swapping would dominate the measurements.*
-- Estimated index memory: about 1.5× the text size for compact C arrays, up to about 5× for Java or linked lists. The worst variant sets the limit.
-- Largest corpus prefix ≈ **4 GB** of text; weak-scaling base ≈ **256 MB** (≈ 40–50 million tokens). Estimates, to be confirmed with the first measured bytes per posting.
+- **Measured** (section Sizing measurements): the peak of a build run is the input text (the whole file is read into memory, 1× its size) plus the index. The index alone is about **1.0× the text for C and C++, 2.5× for Go and 3.5× for Java** (2048 MB corpus; Java is 5.8× on the smallest corpus because of the JVM's fixed overhead). Per posting, peak RSS is about 28 bytes for C and C++, 48 for Go and 61 for Java (2048 MB). The first estimate (1.5× compact, up to 5×) was too high for C/C++ and about right for Java.
+- Largest corpus prefix ≈ **4 GB** of text; weak-scaling base ≈ **256 MB**. Extrapolated peak at 4096 MB: about 18 GB for Java (not run: the guard stopped it), 14.3 GB for Go, 8.1–8.3 GB for C++ and C. Concurrent variants need more than the sequential ones (per-worker buffers, locks, queues), so **Java and Go at 4096 MB do not fit the 20 GB budget with any margin**; see the proposal in Sizing measurements.
 - Mixed modes need enough documents after the preloaded part for all inserts; sized together with `--ops` and checked by the runner before the sweep (section Workload model).
+
+### Sizing measurements (sequential baselines)
+
+Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measurement columns of section Results, plus `language`, `corpus_mb` or `ops`, and `wall_s`; one row per repetition, warm-up included). Measured on 2026-11-15 on the benchmark machine, unpinned, one language at a time, with the four `sequential` variants, **no implementation changed**: `--threads 1 --repeat 1 --warmup 1`, 5 s pause between runs, and a guard that skipped the next corpus size of a language if twice the last peak would not fit in the free memory. Tables show the measured repetition (`warmup` 0); `peak_rss_bytes` is process-wide, so it includes the warm-up repetition (section Memory semantics).
+
+**Build mode, every corpus** (`--mode build`). B/posting is `peak_rss_bytes / postings`; "index only" subtracts the input text (corpus bytes, section Corpus sizes) first. Postings are identical in all four languages (a cross-check), as are documents and terms.
+
+| language | corpus MB | build_ns (s) | peak (GB) | postings | B/posting | B/posting, index only | note |
+|---|---|---|---|---|---|---|---|
+| java | 256 | 3.7 | 1.75 | 18575496 | 94.1 | 80.3 | |
+| java | 512 | 7.6 | 2.93 | 37268327 | 78.5 | 64.8 | |
+| java | 1024 | 16.4 | 5.12 | 74543434 | 68.7 | 54.9 | |
+| java | 2048 | 35.7 | 9.11 | 149009737 | 61.2 | 47.4 | |
+| go | 256 | 2.5 | 0.82 | 18575496 | 44.4 | 30.6 | |
+| go | 512 | 5.4 | 1.61 | 37268327 | 43.1 | 29.4 | |
+| go | 1024 | 11.8 | 3.73 | 74543434 | 50.0 | 36.3 | |
+| go | 2048 | 23.5 | 7.07 | 149009737 | 47.5 | 33.7 | |
+| go | 4096 | 50.8 | 14.31 | 297782777 | 48.1 | 34.3 | † |
+| cpp | 256 | 3.8 | 0.61 | 18575496 | 32.6 | 18.8 | |
+| cpp | 512 | 7.8 | 1.14 | 37268327 | 30.7 | 17.0 | |
+| cpp | 1024 | 16.7 | 2.10 | 74543434 | 28.1 | 14.4 | |
+| cpp | 2048 | 35.2 | 4.03 | 149009737 | 27.0 | 13.3 | |
+| cpp | 4096 | 72.8 | 8.14 | 297782777 | 27.3 | 13.6 | |
+| c | 256 | 2.2 | 0.62 | 18575496 | 33.2 | 19.4 | |
+| c | 512 | 4.6 | 1.22 | 37268327 | 32.7 | 18.9 | |
+| c | 1024 | 9.5 | 2.13 | 74543434 | 28.6 | 14.9 | |
+| c | 2048 | 19.3 | 4.22 | 149009737 | 28.3 | 14.6 | |
+| c | 4096 | 41.2 | 8.32 | 297782777 | 27.9 | 14.2 | |
+
+† **Not valid.** The machine had about 15.8 GB of memory available (a browser and other programs were open, 31 GB installed) and the run peaked at 14.3 GB: about 2 GB of other programs were pushed to swap (swap went from 0 to full), and the run itself shows it (system CPU time 2.4 s against 0.6 s at 2048 MB, voluntary context switches 20,769 against 4,355). The run must be repeated with the other programs closed before it is used. It also breaks the rule that swap is never used; the guard of the sweep was too optimistic (it only required the prediction to fit in the available memory, with no margin). All other runs stayed in RAM (a few MB of swap was touched once, before Go 4096).
+- **Java 4096 MB was not run:** the guard predicted about 19 GB (Java's peak grew ×1.67, ×1.75 and ×1.78 per doubling), above the memory available and too close to `-Xmx20g`.
+- Build time per corpus doubling is about ×2.0–2.2 in every language: linear in the text.
+
+**Query mode, 256 MB corpus** (`--mode query`, `--queries data/queries.txt`, 100,000 queries, `--seed 42`, 1 warm-up + 1 repetition, so the latency file holds two repetitions). `run_ns` is the measured repetition. The sum of query result sizes is the same in all four languages (26,207,950,630 for 1,000,000 operations, both repetitions), and the clock reading cost logged at startup was 12–27 ns.
+
+| language | `--ops` | run_ns (s) | mean µs per query | latency file (bytes) | bytes per latency line |
+|---|---|---|---|---|---|
+| java | 10000 | 0.54 | 54 | 185273 | 9.3 |
+| java | 100000 | 5.12 | 51 | 1850683 | 9.3 |
+| java | 1000000 | 49.45 | 49 | 18454811 | 9.2 |
+| go | 10000 | 0.53 | 53 | 184995 | 9.2 |
+| go | 100000 | 5.33 | 53 | 1851223 | 9.3 |
+| go | 1000000 | 53.99 | 54 | 18529694 | 9.3 |
+| cpp | 10000 | 0.40 | 40 | 185165 | 9.3 |
+| cpp | 100000 | 4.06 | 41 | 1851421 | 9.3 |
+| cpp | 1000000 | 40.89 | 41 | 18513171 | 9.3 |
+| c | 10000 | 0.44 | 44 | 183685 | 9.2 |
+| c | 100000 | 4.41 | 44 | 1838900 | 9.2 |
+| c | 1000000 | 43.74 | 44 | 18391205 | 9.2 |
+
+- Queries are heavy: a query returns on average about 26,000 document IDs on the 256 MB corpus (`AND`/`OR` merge long lists), and the time is linear in `--ops`: 41–54 µs per query. The clock reading cost (12–27 ns) is under 0.1% of that.
+- A latency line is 9.2–9.3 bytes, so a run's latency file is about `9.3 × ops × (warm-up + repetitions)` bytes: 100,000 operations with the 11 repetitions of `params.sh` give about 10 MB, the placeholder `OPS_TOTAL=1000000` would give about 100 MB per run.
+- The mixed modes were **not measured**. Their cost is dominated by the inserts: indexing runs at 27,000 (Java), 40,000 (Go), 27,000 (C++) and 46,000 (C) documents per second on the 256 MB corpus (101,131 documents in `build_ns`).
+
+**Constraint that decides the sizes:** a mixed run needs `PRELOAD_DOCS + floor(ops × insert share / 100)` documents of `QUERY_CORPUS_MB` (section Workload model), and the largest insert share is 80%. The 256 MB corpus has only 101,131 documents, so with the placeholders (`OPS_TOTAL=1000000`) `mixed-20-80` would need 850,000. A run with 100,000 operations needs 80,000 inserts plus the preload.
+
+**Proposal (not applied: `params.sh` unchanged until approved):**
+
+| parameter | placeholder | proposed | reasoning |
+|---|---|---|---|
+| `QUERY_CORPUS_MB` | 256 | **512** | 203,358 documents, enough for preload + inserts (below); the index is still small (1.1–2.9 GB at the build peak). The 256 MB corpus would force a preload of at most 21,000 documents. |
+| `PRELOAD_DOCS` | 50,000 | **100,000** | Half of the 512 MB corpus: the mixed runs start from a real index (about 1 GB), and the preload leaves 103,358 documents for inserts. |
+| `OPS_TOTAL` | 1,000,000 | **100,000** | Strong scaling. At 1 worker: about 4–5 s per repetition at 256 MB, about 8–11 s at 512 MB (extrapolated: lists twice as long, to be confirmed by a first run), so 11 repetitions take about 2 minutes. `mixed-20-80` needs 80,000 + 100,000 = 180,000 ≤ 203,358 documents. At 22 workers a worker has 4,500 operations (about 0.2–0.5 s per repetition), still far above the clock cost. Latency files: about 10 MB per run instead of 100 MB. |
+| `OPS_PER_WORKER` | 100,000 | **5,000** | Weak scaling: 16 workers do 80,000 operations, at most 64,000 inserts + 100,000 preload = 164,000 ≤ 203,358; same work per worker as strong scaling at about 20 workers. 10,000 would need 228,000 documents at 16 workers. |
+| `QUERY_COUNT` | 100,000 | **100,000** (unchanged) | Enough that no worker wraps around the query file (largest share: 100,000 operations at 1 worker, exactly once); the file is 1.45 MB. |
+| `TIMEOUT` | 30m | **60m** (for now) | The slowest sequential run is C++ at 4096 MB: 73 s per build, about 14 minutes for 11 repetitions; Java at 4096 MB would be about the same. A concurrent variant at 1 worker can be slower than a sequential one (locks), so the limit is about 4× the slowest measured run; to be tightened after the first full runs (open items). |
+
+**Decision needed (changes the design, so not proposed as a plain number):** weak scaling at 16 workers uses a 4096 MB corpus, where Java is predicted at about 18 GB and Go measured at 14.3 GB (both for a sequential index; the concurrent ones use more), over the 20 GB budget with no margin. Two ways out: (a) `CORPUS_BASE_MB=128`, `CORPORA_MB="128 256 512 1024 2048"` (strong scaling on those, weak 128 × N up to 2048 at N=16; needs a 128 MB prefix, and the memory peaks are Java 9.1 GB, Go 7.1 GB at 2048 MB); (b) keep the sizes and drop `THREADS_WEAK` 16 or 4096 MB for Java and Go, which the discovered-variants rule does not allow without a per-language list. Recommended: (a).
 
 ### Run conditions
 
@@ -572,8 +640,8 @@ The shared design is complete; what remains are the variant designs and numbers 
 - [ ] Visibility check for mixed modes (what a query may observe). Includes how a concurrent variant keeps posting lists sorted while they are queried, since `AND` and `OR` merge sorted lists.
 - [x] Preprocessing: markup stripping is settled by using a pre-extracted plain-text source (section Corpus); `corpus/extract.sh` (documents), `corpus/normalize.sh` (tokenization), `corpus/make-prefixes.sh` (prefixes) and `corpus/make-queries.sh` (queries) are implemented.
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
-- [ ] Confirm corpus sizes and the memory budget from measured bytes per posting.
-- [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized. Measured: the 256 MB corpus has 101,131 documents (section Corpus sizes), so the current `PRELOAD_DOCS=50000` fits, with about 51,000 documents left for the insert budget.
+- [x] Confirm corpus sizes and the memory budget from measured bytes per posting (section Sizing measurements). Open from it: Java 4096 MB not run, Go 4096 MB to repeat without swap, and the decision on the weak-scaling base.
+- [ ] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable. The runner refuses configurations where preload + insert budget exceed the documents of `QUERY_CORPUS_MB`, so the current placeholders in `params.sh` will not pass on the real corpus until sized. Measured: the 256 MB corpus has 101,131 documents (section Corpus sizes), so the current `PRELOAD_DOCS=50000` fits, with about 51,000 documents left for the insert budget. Query timings and a proposal for all five values are in section Sizing measurements, **waiting for approval** before `params.sh` changes.
 - [x] Insert budget in mixed modes: exact operation counts, shuffled per worker with the shared generator (section Shared implementation rules); `check.sh` now checks mixed modes too.
 - [x] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS` (section Shared implementation rules, Build and runtime settings).
 - [ ] Tighten `TIMEOUT` after the first full runs.
