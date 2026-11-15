@@ -3,12 +3,29 @@ import java.util.Map;
 /**
  * What the shared code needs from an index. A variant implements it with its own data
  * structure and concurrency strategy; the harness (Runner) never sees the difference.
+ *
+ * Every worker thread gets its own {@link Worker} from {@link #worker()}; all the
+ * operations that run concurrently go through it. The other methods are called by one thread
+ * only, outside the concurrent phases (or, for {@link #get}, by a worker that already holds
+ * the locks its variant needs).
  */
 interface Index {
-    /** Indexes document {@code docId} (one line of the corpus: tokens separated by single spaces). */
-    void add(int docId, String doc);
+    /** The per-worker handle: private buffers live here, so workers never share them. */
+    interface Worker {
+        /** Indexes document {@code docId} (one line of the corpus: tokens separated by single spaces). */
+        void add(int docId, String doc);
 
-    /** Returns the posting list of {@code term}, sorted by document ID, or null if the term is absent. */
+        /** Runs query number {@code i} of {@code q} and returns the number of matching documents. */
+        int query(Queries q, int i);
+    }
+
+    /** Makes a handle for one worker thread; called before timing starts. */
+    Worker worker();
+
+    /**
+     * Returns the posting list of {@code term}, sorted by document ID, or null if the term is
+     * absent. No synchronisation of its own: a concurrent variant calls it with the right locks held.
+     */
     PostingList get(String term);
 
     /** Makes the index final (sorting, merging, publishing); timed as finalize_ns. */

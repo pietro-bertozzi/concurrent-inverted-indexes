@@ -6,10 +6,11 @@ import java.util.Map;
  * are added in increasing ID order, so every posting list is already sorted and finish()
  * has nothing to do.
  */
-final class SequentialIndex implements Index {
+final class SequentialIndex implements Index, Index.Worker {
     private final HashMap<String, PostingList> map = new HashMap<>();
     private int docs = 0;
     private long postings = 0;
+    private final QueryEngine engine = new QueryEngine();
 
     @Override
     public void add(int docId, String doc) {
@@ -31,6 +32,13 @@ final class SequentialIndex implements Index {
         }
         docs++;
     }
+
+    /** Only one worker exists: the index is its own handle. */
+    @Override
+    public Worker worker() { return this; }
+
+    @Override
+    public int query(Queries q, int i) { return engine.run(this, q, i); }
 
     @Override
     public PostingList get(String term) { return map.get(term); }

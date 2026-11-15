@@ -20,6 +20,7 @@ final class Args {
     final long seed;            // query and mixed modes
     final String latencies;     // query and mixed modes
     final String dump;          // optional, null if absent
+    final int partitions, batch, queue;   // numeric parameters; 0 if absent (a variant checks the ones it uses)
     private final Map<String, String> values;
 
     /** Parses and validates {@code argv}; throws IllegalArgumentException with the reason. */
@@ -52,6 +53,9 @@ final class Args {
         preload = mixed ? integer("preload", 0) : 0;
         seed = (query || mixed) ? Long.parseUnsignedLong(values.get("seed")) : 0;
         dump = values.get("dump");
+        partitions = values.containsKey("partitions") ? integer("partitions", 1) : 0;
+        batch = values.containsKey("batch") ? integer("batch", 1) : 0;
+        queue = values.containsKey("queue") ? integer("queue", 1) : 0;
     }
 
     /** The insert share in percent of {@code mode}: 0 for query, 100 for build, 5/50/80 for mixed; -1 if not a mode. */

@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 /**
  * The benchmark harness shared by every Java variant: parses the command line, runs the
@@ -17,18 +17,19 @@ import java.util.function.Supplier;
  * Every repetition starts from scratch: the input is read again, the index is new, the
  * generators restart from --seed, so all repetitions do identical work.
  *
- * Only one worker is supported for now (the sequential variant); the operation plan is
- * already per worker, so concurrent variants add their threads here later.
+ * Every phase runs on N worker threads (also with N = 1): documents are handed out from a
+ * shared counter (Workers), and each worker follows its own operation plan (OpPlan).
  */
 final class Runner {
     private Runner() {}
 
     /**
      * Entry point of a variant: {@code maxThreads} is the highest worker count it supports,
-     * {@code factory} makes an empty index, {@code uses} lists the numeric parameters
-     * (partitions, batch, queue) the variant accepts. Exits with status 1 on error.
+     * {@code factory} makes an empty index from the command line (the variant reads the numeric
+     * parameters it uses), {@code uses} lists those parameters (partitions, batch, queue).
+     * Exits with status 1 on error.
      */
-    static void run(String[] argv, int maxThreads, Supplier<Index> factory, String... uses) {
+    static void run(String[] argv, int maxThreads, Function<Args, Index> factory, String... uses) {
         try {
             execute(new Args(argv), maxThreads, factory, uses);
         } catch (IllegalArgumentException | IOException e) {
@@ -49,14 +50,14 @@ final class Runner {
     }
 
     /** Runs all repetitions of {@code a}. */
-    private static void execute(Args a, int maxThreads, Supplier<Index> factory, String[] uses) throws IOException {
+    private static void execute(Args a, int maxThreads, Function<Args, Index> factory, String[] uses) throws IOException {
         if (a.threads > maxThreads) {
             throw new IllegalArgumentException("this variant supports at most " + maxThreads + " worker(s), got --threads " + a.threads);
         }
         for (String name : new String[] {"partitions", "batch", "queue"}) {
-            if (a.has(name) && !Arrays.asList(uses).contains(name)) {
-                throw new IllegalArgumentException("option --" + name + " is not used by this variant");
-            }
+            boolean used = Arrays.asList(uses).contains(name);
+            if (a.has(name) && !used) throw new IllegalArgumentException("option --" + name + " is not used by this variant");
+            if (!a.has(name) && used) throw new IllegalArgumentException("missing required option --" + name + " for this variant");
         }
         boolean build = a.mode.equals("build");
         Queries queries = build ? null : Queries.load(a.queries);
@@ -78,7 +79,7 @@ final class Runner {
 
     /** One repetition: load, index (build / preload), run, finish; prints its row. */
     private static void repetition(Args a, int rep, boolean warmup, boolean last, Queries queries,
-                                   int share, Supplier<Index> factory, BufferedWriter latencies) throws IOException {
+                                   int share, Function<Args, Index> factory, BufferedWriter latencies) throws IOException {
         boolean build = a.mode.equals("build"), mixed = a.mode.startsWith("mixed-");
         Proc.Snapshot before = Proc.snapshot();
 
@@ -87,24 +88,33 @@ final class Runner {
         long loadNs = System.nanoTime() - t;
         if (docs.isEmpty()) throw new IOException(a.input + " has no documents");
 
-        // The plan (the operation order) is made before timing starts.
-        OpPlan plan = null;
+        // The plans (the operation order of every worker) are made before timing starts.
+        int n = a.threads;
+        OpPlan[] plans = null;
+        int opsQuery = 0, opsInsert = 0;
         if (!build) {
             int inserts = OpPlan.totalInserts(a.ops, share);
             if (a.preload + inserts > docs.size()) {
                 throw new IllegalArgumentException("mixed run needs " + (a.preload + inserts) + " documents (preload "
                         + a.preload + " + " + inserts + " inserts) but " + a.input + " has " + docs.size());
             }
-            plan = OpPlan.make(a.ops, share, a.threads, 0, a.seed, queries.size);   // worker 0 (the only one)
+            plans = new OpPlan[n];
+            for (int w = 0; w < n; w++) {
+                plans[w] = OpPlan.make(a.ops, share, n, w, a.seed, queries.size);
+                opsQuery += plans[w].queries;
+                opsInsert += plans[w].inserts;
+            }
         }
 
-        Index index = factory.get();
+        Index index = factory.apply(a);
+        Index.Worker[] workers = new Index.Worker[n];   // one handle per worker, made before timing
+        for (int w = 0; w < n; w++) workers[w] = index.worker();
         long preloadNs = 0, buildNs = 0, runNs = 0, finalizeNs = 0, resultTotal = 0;
-        long[] latency = null;
+        long[][] latency = null;
 
         if (build || a.mode.equals("query")) {
             t = System.nanoTime();
-            for (int d = 0; d < docs.size(); d++) index.add(d, docs.get(d));
+            Workers.index(workers, docs, 0, docs.size());
             buildNs = System.nanoTime() - t;
             if (!build) {                       // queries need the finished index
                 t = System.nanoTime();
@@ -113,7 +123,7 @@ final class Runner {
             }
         } else {
             t = System.nanoTime();
-            for (int d = 0; d < a.preload; d++) index.add(d, docs.get(d));
+            Workers.index(workers, docs, 0, a.preload);
             preloadNs = System.nanoTime() - t;
         }
         if (build) {
@@ -123,23 +133,16 @@ final class Runner {
         }
 
         if (!build) {
-            latency = new long[plan.queries];
-            QueryEngine engine = new QueryEngine();
+            final OpPlan[] myPlans = plans;
+            final long[][] lat = new long[n][];
+            for (int w = 0; w < n; w++) lat[w] = new long[plans[w].queries];
+            latency = lat;
+            long[] results = new long[n];
             AtomicInteger nextDoc = new AtomicInteger(a.preload);   // the shared insert counter
-            int cursor = plan.queryOffset, li = 0;
             t = System.nanoTime();
-            for (byte type : plan.types) {
-                if (type == OpPlan.QUERY) {
-                    long start = System.nanoTime();
-                    resultTotal += engine.run(index, queries, cursor);
-                    latency[li++] = System.nanoTime() - start;
-                    if (++cursor == queries.size) cursor = 0;
-                } else {
-                    int d = nextDoc.getAndIncrement();
-                    index.add(d, docs.get(d));
-                }
-            }
+            Workers.run(n, w -> results[w] = runPlan(workers[w], myPlans[w], queries, docs, nextDoc, lat[w]));
             runNs = System.nanoTime() - t;
+            for (long r : results) resultTotal += r;
             if (mixed) {
                 t = System.nanoTime();
                 index.finish();
@@ -152,16 +155,39 @@ final class Runner {
         String row = String.join("\t", String.valueOf(rep), warmup ? "1" : "0",
                 String.valueOf(loadNs), String.valueOf(preloadNs), String.valueOf(buildNs),
                 String.valueOf(runNs), String.valueOf(finalizeNs),
-                String.valueOf(build ? 0 : plan.queries), String.valueOf(build ? 0 : plan.inserts),
+                String.valueOf(opsQuery), String.valueOf(opsInsert),
                 String.valueOf(index.docs()), String.valueOf(index.terms()), String.valueOf(index.postings()),
                 String.valueOf(Proc.peakRssBytes()), String.valueOf(used.userNs()), String.valueOf(used.sysNs()),
                 String.valueOf(used.ctxVol()), String.valueOf(used.ctxInvol()));
 
         // After the timers have stopped: the latencies, the row, the dump.
-        if (latency != null) writeLatencies(latencies, rep, warmup, latency);
+        if (latency != null) for (long[] l : latency) writeLatencies(latencies, rep, warmup, l);
         System.out.println(row);
         System.out.flush();
         if (a.dump != null && last) Dump.write(index, a.dump);
+    }
+
+    /**
+     * One worker's share of the timed phase: follows its plan, timing every query with two clock
+     * readings around it. An insert takes the next document from the shared counter (whichever
+     * worker inserts next takes the next document). Returns the sum of the query result sizes.
+     */
+    private static long runPlan(Index.Worker me, OpPlan plan, Queries queries, List<String> docs,
+                                AtomicInteger nextDoc, long[] latency) {
+        long total = 0;
+        int cursor = plan.queryOffset, li = 0;
+        for (byte type : plan.types) {
+            if (type == OpPlan.QUERY) {
+                long start = System.nanoTime();
+                total += me.query(queries, cursor);
+                latency[li++] = System.nanoTime() - start;
+                if (++cursor == queries.size) cursor = 0;
+            } else {
+                int d = nextDoc.getAndIncrement();
+                me.add(d, docs.get(d));
+            }
+        }
+        return total;
     }
 
     /** Reads the input file: one string per line (document ID = position). */

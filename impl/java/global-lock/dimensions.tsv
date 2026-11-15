@@ -1,0 +1,8 @@
+partitioning	single
+writer	direct
+coordination	lock
+granularity	index
+write_timing	immediate
+visibility	partial
+uses	batch
+modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
