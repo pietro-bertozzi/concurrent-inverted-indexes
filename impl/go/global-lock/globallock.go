@@ -7,9 +7,10 @@ import (
 )
 
 // GlobalLockIndex (docs/experiment-plan.md, How each variant works): one map and one lock for
-// the whole index. A worker tokenizes its document without the lock, then takes the lock and
-// inserts up to batch postings per acquisition. A query holds the same lock while it reads
-// and merges its lists.
+// the whole index. A worker tokenizes its document without the lock and collects the postings
+// in a private buffer; when the buffer holds batch postings (from one or several documents) it
+// takes the lock and inserts them all, and it flushes what is left at the end of every phase.
+// A query holds the same lock while it reads and merges its lists.
 type GlobalLockIndex struct {
 	m        map[string]*PostingList
 	mu       sync.Mutex // the standard, non-fair mutex
@@ -23,10 +24,12 @@ func NewGlobalLockIndex(batch int) *GlobalLockIndex {
 	return &GlobalLockIndex{m: make(map[string]*PostingList), batch: batch}
 }
 
-// globalWorker is one worker's private state: its tokenizing buffer and its query scratch space.
+// globalWorker is one worker's private state: its tokenizing buffer, its posting buffer and its
+// query scratch space.
 type globalWorker struct {
 	x      *GlobalLockIndex
 	doc    *DocPostings
+	buf    PostingBuffer
 	engine *QueryEngine
 }
 
@@ -37,20 +40,31 @@ func (x *GlobalLockIndex) Worker() Worker {
 func (w *globalWorker) Add(docID int, text string) {
 	x := w.x
 	w.doc.Read(text) // no lock: private work
-	n := len(w.doc.Terms)
-	for from := 0; from < n; from += x.batch {
-		to := from + x.batch
-		if to > n || to < from { // to < from: overflow of a huge batch
-			to = n
+	for k := range w.doc.Terms {
+		w.buf.Add(w.doc.Terms[k], docID, w.doc.Freqs[k])
+		if w.buf.Size() == x.batch { // full: one lock acquisition for batch postings
+			w.flushBuffer()
 		}
-		x.mu.Lock()
-		for k := from; k < to; k++ {
-			x.insert(w.doc.Terms[k], docID, int(w.doc.Freqs[k]))
-		}
-		x.postings += int64(to - from)
-		x.mu.Unlock()
 	}
 	x.docs.Add(1)
+}
+
+func (w *globalWorker) Flush() {
+	if w.buf.Size() > 0 {
+		w.flushBuffer()
+	}
+}
+
+// flushBuffer inserts the whole buffer under one acquisition of the lock.
+func (w *globalWorker) flushBuffer() {
+	x := w.x
+	x.mu.Lock()
+	for k := range w.buf.Terms {
+		x.insert(w.buf.Terms[k], int(w.buf.Docs[k]), int(w.buf.Freqs[k]))
+	}
+	x.postings += int64(w.buf.Size())
+	x.mu.Unlock()
+	w.buf.Clear()
 }
 
 func (w *globalWorker) Query(q *Queries, i int) int {

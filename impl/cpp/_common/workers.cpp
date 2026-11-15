@@ -28,5 +28,6 @@ void indexDocs(const std::vector<Worker*>& workers, const std::vector<std::strin
     runWorkers(static_cast<int>(workers.size()), [&](int w) {
         int d;
         while ((d = next.fetch_add(1)) < to) workers[w]->add(d, docs[d]);
+        workers[w]->flush();   // the end of the phase: nothing may stay in a private buffer
     });
 }

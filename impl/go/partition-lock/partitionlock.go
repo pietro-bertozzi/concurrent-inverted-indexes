@@ -8,9 +8,10 @@ import (
 
 // PartitionLockIndex (docs/experiment-plan.md, How each variant works): the index is P
 // sub-maps, a term lives in partition PartitionOf(term, P), and each partition has its own
-// lock. A worker groups its document's postings by partition and takes each partition's lock
-// once per batch postings (partitions in order 0 .. P-1). A query holds the locks of the
-// partitions of its terms, the lower partition number first.
+// lock. A worker groups its document's postings by partition into one private buffer per
+// partition; when a buffer holds batch postings (from one or several documents) it takes that
+// partition's lock and inserts them all, and it flushes what is left at the end of every phase.
+// A query holds the locks of the partitions of its terms, the lower partition number first.
 type PartitionLockIndex struct {
 	parts []partition
 	batch int
@@ -33,13 +34,14 @@ func NewPartitionLockIndex(partitions, batch int) *PartitionLockIndex {
 	return x
 }
 
-// partWorker is one worker's private state: tokenizing buffer, grouping arrays and query
-// scratch space.
+// partWorker is one worker's private state: tokenizing buffer, grouping arrays, one posting
+// buffer per partition and query scratch space.
 type partWorker struct {
 	x      *PartitionLockIndex
 	doc    *DocPostings
 	engine *QueryEngine
-	first  []int // first[p] .. first[p+1]: slots of partition p in order
+	bufs   []PostingBuffer // postings waiting for each partition
+	first  []int           // first[p] .. first[p+1]: slots of partition p in order
 	next   []int
 	partOf []int // partition of each posting of the document
 	order  []int // posting numbers, grouped by partition
@@ -48,31 +50,45 @@ type partWorker struct {
 func (x *PartitionLockIndex) Worker() Worker {
 	n := len(x.parts)
 	return &partWorker{x: x, doc: NewDocPostings(), engine: NewQueryEngine(),
-		first: make([]int, n+1), next: make([]int, n)}
+		bufs: make([]PostingBuffer, n), first: make([]int, n+1), next: make([]int, n)}
 }
 
 func (w *partWorker) Add(docID int, text string) {
 	x := w.x
 	w.doc.Read(text) // no lock: private work
 	w.group()
-	for p := range x.parts {
-		part := &x.parts[p]
-		end := w.first[p+1]
-		for from := w.first[p]; from < end; from += x.batch {
-			to := from + x.batch
-			if to > end || to < from { // to < from: overflow of a huge batch
-				to = end
+	for p := range x.parts { // partitions in order 0 .. P-1
+		buf := &w.bufs[p]
+		for s := w.first[p]; s < w.first[p+1]; s++ {
+			k := w.order[s]
+			buf.Add(w.doc.Terms[k], docID, w.doc.Freqs[k])
+			if buf.Size() == x.batch { // full: one acquisition for batch postings
+				w.flushPartition(p)
 			}
-			part.mu.Lock()
-			for s := from; s < to; s++ {
-				k := w.order[s]
-				insert(part, w.doc.Terms[k], docID, int(w.doc.Freqs[k]))
-			}
-			part.postings += int64(to - from)
-			part.mu.Unlock()
 		}
 	}
 	x.docs.Add(1)
+}
+
+func (w *partWorker) Flush() {
+	for p := range w.bufs {
+		if w.bufs[p].Size() > 0 {
+			w.flushPartition(p)
+		}
+	}
+}
+
+// flushPartition inserts the buffer of partition p under one acquisition of that partition's lock.
+func (w *partWorker) flushPartition(p int) {
+	part := &w.x.parts[p]
+	buf := &w.bufs[p]
+	part.mu.Lock()
+	for k := range buf.Terms {
+		insert(part, buf.Terms[k], int(buf.Docs[k]), int(buf.Freqs[k]))
+	}
+	part.postings += int64(buf.Size())
+	part.mu.Unlock()
+	buf.Clear()
 }
 
 // group is a counting sort of the document's postings by partition: it fills first and order.

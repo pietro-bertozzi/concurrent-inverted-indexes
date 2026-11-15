@@ -17,6 +17,12 @@ interface Index {
 
         /** Runs query number {@code i} of {@code q} and returns the number of matching documents. */
         int query(Queries q, int i);
+
+        /**
+         * Inserts every posting this worker still holds in a private buffer. Called by the worker's
+         * own thread at the end of every phase (the indexing loop, the timed query or mixed phase).
+         */
+        void flush();
     }
 
     /** Makes a handle for one worker thread; called before timing starts. */

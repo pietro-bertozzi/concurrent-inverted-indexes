@@ -122,6 +122,7 @@ static void plan_body(void *context, int w) {
             me->add(me, d, job->docs->line[d], job->docs->length[d]);
         }
     }
+    me->flush(me);   // the end of the phase: nothing may stay in a private buffer
     job->results[w] = total;
 }
 

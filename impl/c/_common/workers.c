@@ -47,6 +47,7 @@ static void index_body(void *context, int w) {
     Worker *me = job->workers[w];
     int d;
     while ((d = atomic_fetch_add(&job->next, 1)) < job->to) me->add(me, d, job->line[d], job->length[d]);
+    me->flush(me);   // the end of the phase: nothing may stay in a private buffer
 }
 
 void workers_index(Worker **workers, int n, char *const *line, const size_t *length, int from, int to) {

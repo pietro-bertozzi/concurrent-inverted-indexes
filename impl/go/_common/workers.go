@@ -34,6 +34,7 @@ func IndexDocs(workers []Worker, docs []string, from, to int) {
 		for {
 			d := int(next.Add(1) - 1)
 			if d >= to {
+				me.Flush() // the end of the phase: nothing may stay in a private buffer
 				return
 			}
 			me.Add(d, docs[d])

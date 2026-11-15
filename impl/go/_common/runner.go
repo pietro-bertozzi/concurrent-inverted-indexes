@@ -241,6 +241,7 @@ func runPlan(me Worker, plan *OpPlan, queries *Queries, docs []string, nextDoc *
 			me.Add(d, docs[d])
 		}
 	}
+	me.Flush() // the end of the phase: nothing may stay in a private buffer
 	return total
 }
 

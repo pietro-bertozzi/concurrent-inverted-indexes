@@ -49,6 +49,7 @@ final class Workers {
             Index.Worker me = workers[w];
             int d;
             while ((d = next.getAndIncrement()) < to) me.add(d, docs.get(d));
+            me.flush();   // the end of the phase: nothing may stay in a private buffer
         });
     }
 }

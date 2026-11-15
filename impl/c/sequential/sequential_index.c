@@ -49,6 +49,8 @@ static int query(Worker *self, const Queries *q, int i) {
     return queryengine_run(&s->engine, &s->base, q, i);
 }
 
+static void flush(Worker *self) { (void)self; /* nothing is buffered */ }
+
 // Only one worker exists: the index has a single handle.
 static Worker *worker(Index *self) { return &((SequentialIndex *)self)->worker.base; }
 
@@ -85,6 +87,7 @@ Index *sequential_index_new(const Args *args) {
     s->base.destroy = destroy;
     s->worker.base.add = add;
     s->worker.base.query = query;
+    s->worker.base.flush = flush;
     s->worker.index = s;
     queryengine_init(&s->engine);
     map_init(&s->map);

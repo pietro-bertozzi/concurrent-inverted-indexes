@@ -38,6 +38,9 @@ final class SequentialIndex implements Index, Index.Worker {
     public Worker worker() { return this; }
 
     @Override
+    public void flush() { /* nothing is buffered */ }
+
+    @Override
     public int query(Queries q, int i) { return engine.run(this, q, i); }
 
     @Override

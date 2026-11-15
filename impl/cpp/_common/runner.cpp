@@ -75,6 +75,7 @@ int64_t runPlan(Worker& me, const OpPlan& plan, const Queries& queries, const st
             me.add(d, docs[d]);
         }
     }
+    me.flush();   // the end of the phase: nothing may stay in a private buffer
     return total;
 }
 

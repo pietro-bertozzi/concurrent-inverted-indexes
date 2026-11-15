@@ -1,8 +1,10 @@
 // The C partition-lock index (docs/experiment-plan.md, How each variant works): the index is P
 // TermMaps (our own hash map), a term lives in partition partition_of(term, P), and each
-// partition has its own pthread mutex. A worker groups its document's postings by partition
-// and takes each partition's lock once per `batch` postings (partitions in order 0 .. P-1). A
-// query holds the locks of the partitions of its terms, the lower partition number first.
+// partition has its own pthread mutex. A worker groups its document's postings by partition into
+// one private buffer per partition; when a buffer holds `batch` postings (from one or several
+// documents) it takes that partition's lock and inserts them all, and it flushes what is left at
+// the end of every phase. A query holds the locks of the partitions of its terms, the lower
+// partition number first.
 #pragma once
 #include "args.h"
 #include "index.h"

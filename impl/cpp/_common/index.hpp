@@ -22,6 +22,10 @@ public:
 
     // Runs query number i of q and returns the number of matching documents.
     virtual int query(const Queries& q, int i) = 0;
+
+    // Inserts every posting this worker still holds in a private buffer. Called by the worker's
+    // own thread at the end of every phase (the indexing loop, the timed query or mixed phase).
+    virtual void flush() = 0;
 };
 
 class Index {

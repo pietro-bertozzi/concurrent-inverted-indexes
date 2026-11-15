@@ -1,18 +1,21 @@
 // The global-lock index (docs/experiment-plan.md, How each variant works): one unordered_map
-// and one lock for the whole index. A worker tokenizes its document without the lock, then
-// takes the lock and inserts up to `batch` postings per acquisition. A query holds the same
-// lock while it reads and merges its lists.
+// and one lock for the whole index. A worker tokenizes its document without the lock and
+// collects the postings in a private buffer; when the buffer holds `batch` postings (from one or
+// several documents) it takes the lock and inserts them all, and it flushes what is left at the
+// end of every phase. A query holds the same lock while it reads and merges its lists.
 #pragma once
 #include <algorithm>
 #include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
 #include "docpostings.hpp"
 #include "index.hpp"
+#include "postingbuffer.hpp"
 #include "queryengine.hpp"
 
 class GlobalLockIndex : public Index {
@@ -39,21 +42,21 @@ public:
     }
 
 private:
-    // One worker's private state: its tokenizing buffer and its query scratch space.
+    // One worker's private state: its tokenizing buffer, its posting buffer and its query scratch space.
     class Handle : public Worker {
     public:
         explicit Handle(GlobalLockIndex& x) : x_(x) {}
 
         void add(int docId, const std::string& text) override {
             doc_.read(text);                                  // no lock: private work
-            for (size_t from = 0; from < doc_.size(); from += x_.batch_) {
-                size_t to = std::min(doc_.size(), from + x_.batch_);
-                std::lock_guard<std::mutex> guard(x_.mutex_);
-                for (size_t k = from; k < to; k++) x_.insert(*doc_.terms[k], docId, doc_.freqs[k]);
-                x_.postings_ += static_cast<int64_t>(to - from);
+            for (size_t k = 0; k < doc_.size(); k++) {
+                buffer_.add(*doc_.terms[k], docId, doc_.freqs[k]);
+                if (buffer_.size() == x_.batch_) flushBuffer();   // full: one acquisition for `batch` postings
             }
             x_.docs_.fetch_add(1);
         }
+
+        void flush() override { if (buffer_.size() > 0) flushBuffer(); }
 
         int query(const Queries& q, int i) override {
             std::lock_guard<std::mutex> guard(x_.mutex_);
@@ -61,14 +64,25 @@ private:
         }
 
     private:
+        // Inserts the whole buffer under one acquisition of the lock.
+        void flushBuffer() {
+            {
+                std::lock_guard<std::mutex> guard(x_.mutex_);
+                for (size_t k = 0; k < buffer_.size(); k++) x_.insert(std::move(buffer_.terms[k]), buffer_.docs[k], buffer_.freqs[k]);
+                x_.postings_ += static_cast<int64_t>(buffer_.size());
+            }
+            buffer_.clear();
+        }
+
         GlobalLockIndex& x_;
         DocPostings doc_;
+        PostingBuffer buffer_;
         QueryEngine engine_;
     };
 
     // Adds one posting to the list of term; the caller holds the lock.
-    void insert(const std::string& term, int docId, int freq) {
-        map_.try_emplace(term).first->second.insert(docId, freq);
+    void insert(std::string&& term, int docId, int freq) {
+        map_.try_emplace(std::move(term)).first->second.insert(docId, freq);
     }
 
     std::unordered_map<std::string, PostingList> map_;

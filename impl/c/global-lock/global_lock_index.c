@@ -7,6 +7,7 @@
 
 #include "docpostings.h"
 #include "hashmap.h"
+#include "postingbuffer.h"
 #include "queryengine.h"
 #include "util.h"
 
@@ -17,6 +18,7 @@ typedef struct {
     Worker base;       // must be first
     GlobalLockIndex *index;
     DocPostings doc;
+    PostingBuffer buffer;
     QueryEngine engine;
 } Handle;
 
@@ -31,25 +33,35 @@ struct GlobalLockIndex {
     int handle_count;
 };
 
+// Inserts the whole buffer of h under one acquisition of the lock.
+static void flush_buffer(Handle *h) {
+    GlobalLockIndex *x = h->index;
+    PostingBuffer *b = &h->buffer;
+    pthread_mutex_lock(&x->mutex);
+    for (int k = 0; k < b->size; k++) {
+        int created;
+        PostingList *list = map_get_or_create(&x->map, b->terms[k], b->lengths[k], &created);
+        postings_insert(list, b->docs[k], b->freqs[k]);
+    }
+    x->postings += b->size;
+    pthread_mutex_unlock(&x->mutex);
+    postingbuffer_clear(b);
+}
+
 static void add(Worker *self, int doc_id, const char *text, size_t length) {
     Handle *h = (Handle *)self;
-    GlobalLockIndex *x = h->index;
     docpostings_read(&h->doc, text, length);   // no lock: private work
-    int n = h->doc.count;
-    for (int from = 0; from < n; from += x->batch) {
-        int to = n - from > x->batch ? from + x->batch : n;
-        pthread_mutex_lock(&x->mutex);
-        for (int k = from; k < to; k++) {
-            const DocTerm *t = &h->doc.terms[k];
-            int created;
-            PostingList *list = map_get_or_create(&x->map, t->term, t->length, &created);
-            postings_insert(list, doc_id, t->freq);
-        }
-        x->postings += to - from;
-        pthread_mutex_unlock(&x->mutex);
-        if (to == n) break;
+    for (int k = 0; k < h->doc.count; k++) {
+        const DocTerm *t = &h->doc.terms[k];
+        postingbuffer_add(&h->buffer, t->term, t->length, doc_id, t->freq);
+        if (h->buffer.size == h->index->batch) flush_buffer(h);   // full: one acquisition for `batch` postings
     }
-    atomic_fetch_add(&x->docs, 1);
+    atomic_fetch_add(&h->index->docs, 1);
+}
+
+static void flush(Worker *self) {
+    Handle *h = (Handle *)self;
+    if (h->buffer.size > 0) flush_buffer(h);
 }
 
 static int query(Worker *self, const Queries *q, int i) {
@@ -65,8 +77,10 @@ static Worker *worker(Index *self) {
     Handle *h = xcalloc(1, sizeof(Handle));
     h->base.add = add;
     h->base.query = query;
+    h->base.flush = flush;
     h->index = x;
     docpostings_init(&h->doc);
+    postingbuffer_init(&h->buffer);
     queryengine_init(&h->engine);
     x->handles = xrealloc(x->handles, (size_t)(x->handle_count + 1) * sizeof(Handle *));
     x->handles[x->handle_count++] = h;
@@ -90,6 +104,7 @@ static void destroy(Index *self) {
     GlobalLockIndex *x = (GlobalLockIndex *)self;
     for (int k = 0; k < x->handle_count; k++) {
         docpostings_destroy(&x->handles[k]->doc);
+        postingbuffer_destroy(&x->handles[k]->buffer);
         queryengine_destroy(&x->handles[k]->engine);
         free(x->handles[k]);
     }

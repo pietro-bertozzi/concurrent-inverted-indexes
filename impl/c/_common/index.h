@@ -26,6 +26,9 @@ struct Worker {
     void (*add)(Worker *self, int doc_id, const char *doc, size_t length);
     // Runs query number i of q and returns the number of matching documents.
     int (*query)(Worker *self, const Queries *q, int i);
+    // Inserts every posting this worker still holds in a private buffer. Called by the worker's
+    // own thread at the end of every phase (the indexing loop, the timed query or mixed phase).
+    void (*flush)(Worker *self);
 };
 
 struct Index {

@@ -42,6 +42,9 @@ func (x *SequentialIndex) Add(docID int, doc string) {
 // Worker: only one worker exists, the index is its own handle.
 func (x *SequentialIndex) Worker() Worker { return x }
 
+// Flush: nothing is buffered.
+func (x *SequentialIndex) Flush() {}
+
 func (x *SequentialIndex) Query(q *Queries, i int) int { return x.engine.Run(x, q, i) }
 
 func (x *SequentialIndex) Get(term string) *PostingList { return x.m[term] }

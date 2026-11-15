@@ -187,6 +187,7 @@ final class Runner {
                 me.add(d, docs.get(d));
             }
         }
+        me.flush();   // the end of the phase: nothing may stay in a private buffer
         return total;
     }
 

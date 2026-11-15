@@ -30,4 +30,8 @@ type Worker interface {
 	Add(docID int, doc string)
 	// Query runs query number i of q and returns the number of matching documents.
 	Query(q *Queries, i int) int
+	// Flush inserts every posting this worker still holds in a private buffer. Called by the
+	// worker's own goroutine at the end of every phase (the indexing loop, the timed query or
+	// mixed phase).
+	Flush()
 }

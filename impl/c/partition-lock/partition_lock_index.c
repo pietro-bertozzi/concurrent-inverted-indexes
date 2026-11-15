@@ -8,6 +8,7 @@
 #include "docpostings.h"
 #include "hashmap.h"
 #include "partitionhash.h"
+#include "postingbuffer.h"
 #include "queryengine.h"
 #include "util.h"
 
@@ -26,6 +27,7 @@ typedef struct {
     PartitionLockIndex *index;
     DocPostings doc;
     QueryEngine engine;
+    PostingBuffer *buffers;   // postings waiting for each partition (partitions entries)
     int *first;        // first[p] .. first[p+1]: slots of partition p in order (partitions + 1 entries)
     int *next;         // fill positions while grouping (partitions entries)
     int *part_of;      // partition of each posting of the document
@@ -61,29 +63,42 @@ static void group(Handle *h) {
     for (int k = 0; k < n; k++) h->order[h->next[h->part_of[k]]++] = k;
 }
 
+// Inserts the buffer of partition p under one acquisition of that partition's lock.
+static void flush_partition(Handle *h, int p) {
+    Partition *part = &h->index->parts[p];
+    PostingBuffer *b = &h->buffers[p];
+    pthread_mutex_lock(&part->mutex);
+    for (int k = 0; k < b->size; k++) {
+        int created;
+        PostingList *list = map_get_or_create(&part->map, b->terms[k], b->lengths[k], &created);
+        postings_insert(list, b->docs[k], b->freqs[k]);
+    }
+    part->postings += b->size;
+    pthread_mutex_unlock(&part->mutex);
+    postingbuffer_clear(b);
+}
+
 static void add(Worker *self, int doc_id, const char *text, size_t length) {
     Handle *h = (Handle *)self;
     PartitionLockIndex *x = h->index;
     docpostings_read(&h->doc, text, length);   // no lock: private work
     group(h);
-    for (int p = 0; p < x->partitions; p++) {
-        Partition *part = &x->parts[p];
-        int end = h->first[p + 1];
-        for (int from = h->first[p]; from < end; from += x->batch) {
-            int to = end - from > x->batch ? from + x->batch : end;
-            pthread_mutex_lock(&part->mutex);
-            for (int s = from; s < to; s++) {
-                const DocTerm *t = &h->doc.terms[h->order[s]];
-                int created;
-                PostingList *list = map_get_or_create(&part->map, t->term, t->length, &created);
-                postings_insert(list, doc_id, t->freq);
-            }
-            part->postings += to - from;
-            pthread_mutex_unlock(&part->mutex);
-            if (to == end) break;
+    for (int p = 0; p < x->partitions; p++) {   // partitions in order 0 .. P-1
+        PostingBuffer *b = &h->buffers[p];
+        for (int s = h->first[p]; s < h->first[p + 1]; s++) {
+            const DocTerm *t = &h->doc.terms[h->order[s]];
+            postingbuffer_add(b, t->term, t->length, doc_id, t->freq);
+            if (b->size == x->batch) flush_partition(h, p);   // full: one acquisition for `batch` postings
         }
     }
     atomic_fetch_add(&x->docs, 1);
+}
+
+static void flush(Worker *self) {
+    Handle *h = (Handle *)self;
+    for (int p = 0; p < h->index->partitions; p++) {
+        if (h->buffers[p].size > 0) flush_partition(h, p);
+    }
 }
 
 static int query(Worker *self, const Queries *q, int i) {
@@ -105,9 +120,12 @@ static Worker *worker(Index *self) {
     Handle *h = xcalloc(1, sizeof(Handle));
     h->base.add = add;
     h->base.query = query;
+    h->base.flush = flush;
     h->index = x;
     docpostings_init(&h->doc);
     queryengine_init(&h->engine);
+    h->buffers = xmalloc((size_t)x->partitions * sizeof(PostingBuffer));
+    for (int p = 0; p < x->partitions; p++) postingbuffer_init(&h->buffers[p]);
     h->first = xcalloc((size_t)x->partitions + 1, sizeof(int));
     h->next = xcalloc((size_t)x->partitions, sizeof(int));
     x->handles = xrealloc(x->handles, (size_t)(x->handle_count + 1) * sizeof(Handle *));
@@ -148,6 +166,8 @@ static void destroy(Index *self) {
         Handle *h = x->handles[k];
         docpostings_destroy(&h->doc);
         queryengine_destroy(&h->engine);
+        for (int p = 0; p < x->partitions; p++) postingbuffer_destroy(&h->buffers[p]);
+        free(h->buffers);
         free(h->first);
         free(h->next);
         free(h->part_of);

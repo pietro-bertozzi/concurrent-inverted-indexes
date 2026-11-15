@@ -14,6 +14,8 @@ public:
     // Only one worker exists: the index is its own handle.
     Worker* worker() override { return this; }
 
+    void flush() override { /* nothing is buffered */ }
+
     int query(const Queries& q, int i) override { return engine_.run(*this, q, i); }
 
     void add(int docId, const std::string& doc) override {
