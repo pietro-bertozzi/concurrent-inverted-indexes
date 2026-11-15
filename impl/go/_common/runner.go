@@ -140,7 +140,7 @@ func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory f
 	index := factory(a)
 	workers := make([]Worker, n) // one handle per worker, made before timing
 	for w := range workers {
-		workers[w] = index.Worker()
+		workers[w] = index.Worker(w)
 	}
 	var preloadNs, buildNs, runNs, finalizeNs, resultTotal int64
 	var latency [][]int64

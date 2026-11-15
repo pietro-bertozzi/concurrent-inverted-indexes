@@ -22,7 +22,7 @@ class GlobalLockIndex : public Index {
 public:
     explicit GlobalLockIndex(int batch) : batch_(static_cast<size_t>(batch)) {}
 
-    Worker* worker() override {
+    Worker* worker(int) override {
         handles_.push_back(std::make_unique<Handle>(*this));
         return handles_.back().get();
     }

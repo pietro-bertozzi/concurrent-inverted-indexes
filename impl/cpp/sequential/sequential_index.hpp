@@ -12,7 +12,7 @@
 class SequentialIndex : public Index, public Worker {
 public:
     // Only one worker exists: the index is its own handle.
-    Worker* worker() override { return this; }
+    Worker* worker(int) override { return this; }
 
     void flush() override { /* nothing is buffered */ }
 

@@ -10,8 +10,8 @@ import (
 // sub-maps, a term lives in partition PartitionOf(term, P), and each partition has its own
 // lock. A worker groups its document's postings by partition into one private buffer per
 // partition; when a buffer holds batch postings (from one or several documents) it takes that
-// partition's lock and inserts them all, and it flushes what is left at the end of every phase.
-// A query holds the locks of the partitions of its terms, the lower partition number first.
+// partition's lock and inserts them all, and it flushes what is left at the end of every phase, visiting the partitions from (worker number mod P), wrapping around, so that workers
+// do not all queue at partition 0. A query holds the locks of the partitions of its terms, the lower partition number first.
 type PartitionLockIndex struct {
 	parts []partition
 	batch int
@@ -40,6 +40,7 @@ type partWorker struct {
 	x      *PartitionLockIndex
 	doc    *DocPostings
 	engine *QueryEngine
+	start  int             // the partition this worker visits first (worker number mod P)
 	bufs   []PostingBuffer // postings waiting for each partition
 	first  []int           // first[p] .. first[p+1]: slots of partition p in order
 	next   []int
@@ -47,17 +48,18 @@ type partWorker struct {
 	order  []int // posting numbers, grouped by partition
 }
 
-func (x *PartitionLockIndex) Worker() Worker {
+func (x *PartitionLockIndex) Worker(number int) Worker {
 	n := len(x.parts)
 	return &partWorker{x: x, doc: NewDocPostings(), engine: NewQueryEngine(),
-		bufs: make([]PostingBuffer, n), first: make([]int, n+1), next: make([]int, n)}
+		start: number % n, bufs: make([]PostingBuffer, n), first: make([]int, n+1), next: make([]int, n)}
 }
 
 func (w *partWorker) Add(docID int, text string) {
 	x := w.x
 	w.doc.Read(text) // no lock: private work
 	w.group()
-	for p := range x.parts { // partitions in order 0 .. P-1
+	for i := range x.parts { // partitions from start, wrapping around
+		p := (w.start + i) % len(x.parts)
 		buf := &w.bufs[p]
 		for s := w.first[p]; s < w.first[p+1]; s++ {
 			k := w.order[s]
@@ -71,7 +73,8 @@ func (w *partWorker) Add(docID int, text string) {
 }
 
 func (w *partWorker) Flush() {
-	for p := range w.bufs {
+	for i := range w.bufs {
+		p := (w.start + i) % len(w.bufs)
 		if w.bufs[p].Size() > 0 {
 			w.flushPartition(p)
 		}

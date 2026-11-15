@@ -112,7 +112,7 @@ void repetition(const Args& a, int rep, bool warmup, bool last, const Queries* q
 
     std::unique_ptr<Index> index = factory(a);
     std::vector<Worker*> workers;   // one handle per worker, made before timing
-    for (int w = 0; w < n; w++) workers.push_back(index->worker());
+    for (int w = 0; w < n; w++) workers.push_back(index->worker(w));
     int64_t preloadNs = 0, buildNs = 0, runNs = 0, finalizeNs = 0, resultTotal = 0;
     std::vector<std::vector<int64_t>> latency;
 

@@ -2,8 +2,9 @@
 // sub-maps, a term lives in partition partitionOf(term, P), and each partition has its own
 // lock. A worker groups its document's postings by partition into one private buffer per
 // partition; when a buffer holds `batch` postings (from one or several documents) it takes that
-// partition's lock and inserts them all, and it flushes what is left at the end of every phase.
-// A query holds the locks of the partitions of its terms, the lower partition number first.
+// partition's lock and inserts them all, and it flushes what is left at the end of every phase,
+// visiting the partitions from (worker number mod P), wrapping around, so that workers do not all
+// queue at partition 0. A query holds the locks of the partitions of its terms, the lower partition number first.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -25,8 +26,8 @@ public:
     PartitionLockIndex(int partitions, int batch)
         : parts_(static_cast<size_t>(partitions)), batch_(static_cast<size_t>(batch)) {}
 
-    Worker* worker() override {
-        handles_.push_back(std::make_unique<Handle>(*this));
+    Worker* worker(int number) override {
+        handles_.push_back(std::make_unique<Handle>(*this, static_cast<size_t>(number) % parts_.size()));
         return handles_.back().get();
     }
 
@@ -70,13 +71,14 @@ private:
     // partition and query scratch space.
     class Handle : public Worker {
     public:
-        explicit Handle(PartitionLockIndex& x)
-            : x_(x), buffers_(x.parts_.size()), first_(x.parts_.size() + 1), next_(x.parts_.size()) {}
+        Handle(PartitionLockIndex& x, size_t start)
+            : x_(x), start_(start), buffers_(x.parts_.size()), first_(x.parts_.size() + 1), next_(x.parts_.size()) {}
 
         void add(int docId, const std::string& text) override {
             doc_.read(text);                                  // no lock: private work
             group();
-            for (size_t p = 0; p < x_.parts_.size(); p++) {   // partitions in order 0 .. P-1
+            for (size_t i = 0; i < x_.parts_.size(); i++) {   // partitions from start_, wrapping around
+                size_t p = (start_ + i) % x_.parts_.size();
                 PostingBuffer& buffer = buffers_[p];
                 for (size_t s = first_[p]; s < first_[p + 1]; s++) {
                     size_t k = order_[s];
@@ -88,7 +90,10 @@ private:
         }
 
         void flush() override {
-            for (size_t p = 0; p < buffers_.size(); p++) if (buffers_[p].size() > 0) flushPartition(p);
+            for (size_t i = 0; i < buffers_.size(); i++) {
+                size_t p = (start_ + i) % buffers_.size();
+                if (buffers_[p].size() > 0) flushPartition(p);
+            }
         }
 
         int query(const Queries& q, int i) override {
@@ -131,6 +136,7 @@ private:
         }
 
         PartitionLockIndex& x_;
+        size_t start_;                         // the partition this worker visits first (worker number mod P)
         DocPostings doc_;
         QueryEngine engine_;
         std::vector<PostingBuffer> buffers_;   // postings waiting for each partition

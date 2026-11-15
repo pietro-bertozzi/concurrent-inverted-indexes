@@ -27,6 +27,7 @@ typedef struct {
     PartitionLockIndex *index;
     DocPostings doc;
     QueryEngine engine;
+    int start;         // the partition this worker visits first (worker number mod P)
     PostingBuffer *buffers;   // postings waiting for each partition (partitions entries)
     int *first;        // first[p] .. first[p+1]: slots of partition p in order (partitions + 1 entries)
     int *next;         // fill positions while grouping (partitions entries)
@@ -83,7 +84,8 @@ static void add(Worker *self, int doc_id, const char *text, size_t length) {
     PartitionLockIndex *x = h->index;
     docpostings_read(&h->doc, text, length);   // no lock: private work
     group(h);
-    for (int p = 0; p < x->partitions; p++) {   // partitions in order 0 .. P-1
+    for (int i = 0; i < x->partitions; i++) {   // partitions from h->start, wrapping around
+        int p = (h->start + i) % x->partitions;
         PostingBuffer *b = &h->buffers[p];
         for (int s = h->first[p]; s < h->first[p + 1]; s++) {
             const DocTerm *t = &h->doc.terms[h->order[s]];
@@ -96,7 +98,8 @@ static void add(Worker *self, int doc_id, const char *text, size_t length) {
 
 static void flush(Worker *self) {
     Handle *h = (Handle *)self;
-    for (int p = 0; p < h->index->partitions; p++) {
+    for (int i = 0; i < h->index->partitions; i++) {
+        int p = (h->start + i) % h->index->partitions;
         if (h->buffers[p].size > 0) flush_partition(h, p);
     }
 }
@@ -115,13 +118,14 @@ static int query(Worker *self, const Queries *q, int i) {
     return size;
 }
 
-static Worker *worker(Index *self) {
+static Worker *worker(Index *self, int number) {
     PartitionLockIndex *x = (PartitionLockIndex *)self;
     Handle *h = xcalloc(1, sizeof(Handle));
     h->base.add = add;
     h->base.query = query;
     h->base.flush = flush;
     h->index = x;
+    h->start = number % x->partitions;
     docpostings_init(&h->doc);
     queryengine_init(&h->engine);
     h->buffers = xmalloc((size_t)x->partitions * sizeof(PostingBuffer));

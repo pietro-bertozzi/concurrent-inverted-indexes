@@ -40,7 +40,7 @@ func (x *SequentialIndex) Add(docID int, doc string) {
 }
 
 // Worker: only one worker exists, the index is its own handle.
-func (x *SequentialIndex) Worker() Worker { return x }
+func (x *SequentialIndex) Worker(number int) Worker { return x }
 
 // Flush: nothing is buffered.
 func (x *SequentialIndex) Flush() {}

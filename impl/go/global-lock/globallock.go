@@ -33,7 +33,7 @@ type globalWorker struct {
 	engine *QueryEngine
 }
 
-func (x *GlobalLockIndex) Worker() Worker {
+func (x *GlobalLockIndex) Worker(number int) Worker {
 	return &globalWorker{x: x, doc: NewDocPostings(), engine: NewQueryEngine()}
 }
 

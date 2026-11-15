@@ -157,7 +157,7 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
 
     Index *index = factory(a);
     Worker **workers = xmalloc((size_t)n * sizeof(Worker *));   // one handle per worker, made before timing
-    for (int w = 0; w < n; w++) workers[w] = index->worker(index);
+    for (int w = 0; w < n; w++) workers[w] = index->worker(index, w);
     int64_t preload_ns = 0, build_ns = 0, run_ns = 0, finalize_ns = 0, result_total = 0;
     int64_t **latency = NULL;
 

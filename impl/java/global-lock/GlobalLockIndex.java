@@ -20,7 +20,7 @@ final class GlobalLockIndex implements Index {
     GlobalLockIndex(int batch) { this.batch = batch; }
 
     @Override
-    public Worker worker() { return new Handle(); }
+    public Worker worker(int number) { return new Handle(); }
 
     /** One worker's private state: its tokenizing buffer, its posting buffer and its query scratch space. */
     private final class Handle implements Worker {

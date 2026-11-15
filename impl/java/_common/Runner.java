@@ -108,7 +108,7 @@ final class Runner {
 
         Index index = factory.apply(a);
         Index.Worker[] workers = new Index.Worker[n];   // one handle per worker, made before timing
-        for (int w = 0; w < n; w++) workers[w] = index.worker();
+        for (int w = 0; w < n; w++) workers[w] = index.worker(w);
         long preloadNs = 0, buildNs = 0, runNs = 0, finalizeNs = 0, resultTotal = 0;
         long[][] latency = null;
 

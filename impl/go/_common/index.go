@@ -7,8 +7,8 @@ package main
 // concurrently go through it. The other methods are called by one goroutine only, outside the
 // concurrent phases (or, for Get, by a worker that already holds the locks its variant needs).
 type Index interface {
-	// Worker makes a handle for one worker; called before timing starts.
-	Worker() Worker
+	// Worker makes the handle of worker number (0-based); called before timing starts.
+	Worker(number int) Worker
 	// Get returns the posting list of term, sorted by document ID, or nil if the term is absent.
 	// No synchronisation of its own: a concurrent variant calls it with the right locks held.
 	Get(term string) *PostingList

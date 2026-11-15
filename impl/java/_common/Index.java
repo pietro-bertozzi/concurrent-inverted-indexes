@@ -25,8 +25,8 @@ interface Index {
         void flush();
     }
 
-    /** Makes a handle for one worker thread; called before timing starts. */
-    Worker worker();
+    /** Makes the handle of worker {@code number} (0-based); called before timing starts. */
+    Worker worker(int number);
 
     /**
      * Returns the posting list of {@code term}, sorted by document ID, or null if the term is

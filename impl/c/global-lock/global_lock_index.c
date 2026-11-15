@@ -72,7 +72,8 @@ static int query(Worker *self, const Queries *q, int i) {
     return size;
 }
 
-static Worker *worker(Index *self) {
+static Worker *worker(Index *self, int number) {
+    (void)number;
     GlobalLockIndex *x = (GlobalLockIndex *)self;
     Handle *h = xcalloc(1, sizeof(Handle));
     h->base.add = add;

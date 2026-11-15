@@ -35,7 +35,7 @@ final class SequentialIndex implements Index, Index.Worker {
 
     /** Only one worker exists: the index is its own handle. */
     @Override
-    public Worker worker() { return this; }
+    public Worker worker(int number) { return this; }
 
     @Override
     public void flush() { /* nothing is buffered */ }

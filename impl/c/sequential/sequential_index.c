@@ -52,7 +52,8 @@ static int query(Worker *self, const Queries *q, int i) {
 static void flush(Worker *self) { (void)self; /* nothing is buffered */ }
 
 // Only one worker exists: the index has a single handle.
-static Worker *worker(Index *self) { return &((SequentialIndex *)self)->worker.base; }
+static Worker *worker(Index *self, int number) {
+    (void)number; return &((SequentialIndex *)self)->worker.base; }
 
 static const PostingList *get(const Index *self, const char *term, size_t length) {
     return map_get(&((const SequentialIndex *)self)->map, term, length);

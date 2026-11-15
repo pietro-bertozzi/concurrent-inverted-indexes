@@ -32,9 +32,9 @@ struct Worker {
 };
 
 struct Index {
-    // Makes a handle for one worker thread; called before timing starts. The index owns it
-    // and frees it in destroy.
-    Worker *(*worker)(Index *self);
+    // Makes the handle of worker `number` (0-based); called before timing starts. The index
+    // owns it and frees it in destroy.
+    Worker *(*worker)(Index *self, int number);
     // Returns the posting list of term (sorted by document ID), or NULL if the term is absent.
     // No synchronisation of its own: a concurrent variant calls it with the right locks held.
     const PostingList *(*get)(const Index *self, const char *term, size_t length);

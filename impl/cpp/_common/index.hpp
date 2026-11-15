@@ -32,8 +32,8 @@ class Index {
 public:
     virtual ~Index() = default;
 
-    // Makes a handle for one worker thread; called before timing starts. The index owns it.
-    virtual Worker* worker() = 0;
+    // Makes the handle of worker `number` (0-based); called before timing starts. The index owns it.
+    virtual Worker* worker(int number) = 0;
 
     // Returns the posting list of term, sorted by document ID, or nullptr if the term is absent.
     // No synchronisation of its own: a concurrent variant calls it with the right locks held.

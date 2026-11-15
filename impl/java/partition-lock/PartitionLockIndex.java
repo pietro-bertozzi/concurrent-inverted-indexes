@@ -11,7 +11,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * lock. A worker groups its document's postings by partition into one private buffer per
  * partition; when a buffer holds {@code batch} postings (from one or several documents) it takes
  * that partition's lock and inserts them all, and it flushes what is left at the end of every
- * phase. A query holds the locks of the partitions of its terms, the lower partition number first.
+ * phase, visiting the partitions from (worker number mod P), wrapping around, so that workers do not all queue at partition 0. A query holds the locks of the partitions of its terms, the lower partition number first.
  */
 final class PartitionLockIndex implements Index {
     /** One partition: its sub-map, its lock and its posting count (guarded by the lock). */
@@ -32,7 +32,7 @@ final class PartitionLockIndex implements Index {
     }
 
     @Override
-    public Worker worker() { return new Handle(); }
+    public Worker worker(int number) { return new Handle(number % parts.length); }
 
     /** One worker's private state: tokenizing buffer, grouping arrays, one posting buffer per partition, query scratch space. */
     private final class Handle implements Worker {
@@ -43,7 +43,10 @@ final class PartitionLockIndex implements Index {
         private int[] partOf = new int[512];                     // partition of each posting of the document
         private int[] order = new int[512];                      // posting numbers, grouped by partition
 
-        Handle() {
+        private final int start;   // the partition this worker visits first (worker number mod P)
+
+        Handle(int start) {
+            this.start = start;
             for (int p = 0; p < buffers.length; p++) buffers[p] = new PostingBuffer();
         }
 
@@ -51,7 +54,8 @@ final class PartitionLockIndex implements Index {
         public void add(int docId, String text) {
             doc.read(text);                                       // no lock: private work
             group();
-            for (int p = 0; p < parts.length; p++) {              // partitions in order 0 .. P-1
+            for (int i = 0; i < parts.length; i++) {              // partitions from `start`, wrapping around
+                int p = (start + i) % parts.length;
                 PostingBuffer buffer = buffers[p];
                 for (int s = first[p]; s < first[p + 1]; s++) {
                     int k = order[s];
@@ -64,7 +68,10 @@ final class PartitionLockIndex implements Index {
 
         @Override
         public void flush() {
-            for (int p = 0; p < parts.length; p++) if (buffers[p].size > 0) flushPartition(p);
+            for (int i = 0; i < parts.length; i++) {
+                int p = (start + i) % parts.length;
+                if (buffers[p].size > 0) flushPartition(p);
+            }
         }
 
         /** Inserts the buffer of partition {@code p} under one acquisition of that partition's lock. */
