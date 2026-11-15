@@ -78,7 +78,7 @@ expected canonical dump) is in `data/tiny/`.
 ## Status
 
 Infrastructure is done (skeleton, parameters, runner, correctness check, test data,
-preprocessing). The four `sequential` baselines (`impl/java`, `impl/go`, `impl/cpp`, `impl/c`) are done. Current phase: round 1 of `docs/experiment-plan.md`, the `global-lock` and `partition-lock` variants, Java first, then Go, C++ and C (done in all four languages). Round 2 has begun: `private-merge` (all four languages; done) and `partition-writers` (Java done; Go, C++ and C next). All variants pass `bench/check.sh`. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
+preprocessing). The four `sequential` baselines (`impl/java`, `impl/go`, `impl/cpp`, `impl/c`) are done. Current phase: round 1 of `docs/experiment-plan.md`, the `global-lock` and `partition-lock` variants, Java first, then Go, C++ and C (done in all four languages). Round 2 has begun: `private-merge` (all four languages; done) and `partition-writers` (Java and Go done; C++ and C next). All variants pass `bench/check.sh`. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
 compiles the sources from a copy in `build/src/`), C++ needs `g++`, C needs `gcc` (its hash map is our own, see `docs/design.md`). The corpus
 sizes (128 to 2048 MB) and the `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS_MB` values of the
 params files come from the sizing measurements (`docs/design.md`, section Sizing measurements).

@@ -402,6 +402,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Java.** `PartitionWritersIndex`; the buffer is `PostingBuffer` (made with an initial capacity, `min(batch, 1024)`), the message `(partition, buffer)`. The loop in `add` reads `buffers[p]` again for every posting, because `send` replaces the buffer in its slot (a stale reference would keep filling a buffer that already belongs to the owner: found by the first test, which lost postings). **Cross-check** (8 MB corpus, build mode): dumps identical to `sequential` for N = 1, 2, 3, 6, 8, 16, 22 with `batch` 1 to 1024 and `queue` 1 to 64, including the smallest queue with batch 1 at 22 workers.
 
+**Go.** `PartitionWritersIndex` (`partitionwriters.go`); the queue is a buffered `chan message` of capacity `queue`, put and taken with `select` and a `default` case (never blocking); a message is `(partition, PostingBuffer)`, the buffer struct travelling by value (its slices are not copied); waiting yields with `runtime.Gosched`; a term is cloned (`strings.Clone`) when it becomes a new key, as in the other variants. **Cross-check:** dumps identical to `sequential` on the 8 MB corpus for the same worker, batch and queue values as Java (N up to 22, batch 1 to 1024, queue 1 to 64); the query sums equal those of `partition-lock` (15,806,665 at 8 workers and 15,698,102 at 22 with `--ops 20000`, seed 42, 8 MB corpus), in Java and Go.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
