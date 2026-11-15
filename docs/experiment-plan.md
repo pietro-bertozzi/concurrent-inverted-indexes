@@ -102,7 +102,7 @@ No granularity removes the limit of "the": the lock that protects it is always b
 
 Taking a lock has a fixed cost: the lock's cache line must travel from one core to another, which costs about as much as inserting one posting.
 
-- **Batch 1.** One lock per posting. A document has about 180 distinct words, so about 180 lock acquisitions per document; half the time goes to taking and releasing locks.
+- **Batch 1.** One lock per posting. A document has about 180 distinct words (430 words in all), so about 180 lock acquisitions per document; half the time goes to taking and releasing locks.
 - **Batch 1024.** The worker collects postings in a private buffer (no lock), across documents, and inserts 1024 at a time under one acquisition. The fixed cost is divided by 1024.
 
 ```
@@ -220,6 +220,32 @@ Writing predictions first is deliberate. A result that confirms a prediction sho
 
 ### Q1. Is the cost the lock itself, or how often you take it?
 
+**The strategy in short.** A lock can slow workers down in two different ways, and the experiment has one knob for each. Turning the knobs one at a time shows which cost dominates.
+
+The two suspects (picture one bathroom with a single key kept at reception):
+
+- **Overhead:** the trip to reception to fetch the key. It is paid **every time** a lock is taken, even when nobody else wants it.
+- **Contention:** the **queue** at the door, because someone else holds the key.
+
+The two knobs:
+
+- **Batch: how often the key is fetched.** Batch 1 takes the lock for every posting, batch 1024 once every 1024. It cuts the trips (overhead), but not the queue: the work done inside stays the same.
+- **Partitions: how many bathrooms there are.** 4 partitions give 4 queues, 64 give 64. It splits the queue (contention), but not the trips: each worker takes a lock just as often.
+
+One extra measurement: **1 worker.** With a single worker no queue can exist, so whatever a variant loses against `sequential` at 1 worker is pure overhead (plus the per-document counting, see Rules every variant follows).
+
+How the result is read:
+
+| If we see… | The main cost is… |
+| --- | --- |
+| a larger batch helps a lot, more partitions little | overhead (too many lock acquisitions) |
+| more partitions help a lot, a larger batch little | contention (too much waiting) |
+| both help | both, and the sizes of the two gains say which weighs more |
+
+An independent check: **voluntary context switches** count how often a thread fell asleep because the lock was taken, that is, how often it queued. Many means contention; few, while still slow, means overhead.
+
+In one sentence: two knobs, one per cost, with the 1-worker run and the context switches as cross-checks. The prediction below is that, at small batches, overhead is the main cost.
+
 **Fundamentals.**
 
 - **Amdahl's law.** If a fraction s of the work is serial, the speedup with any number of workers is at most 1 / s. Work done while holding a shared lock is serial: only one worker can be inside.
@@ -229,18 +255,85 @@ Writing predictions first is deliberate. A result that confirms a prediction sho
 
 **Why it matters.** It separates two costs that look the same in a speedup curve: contention (waiting for the lock) and overhead (taking it). Reducing one does not fix the other.
 
-**Experiment.** `global-lock` and `partition-lock` (P = 4, 64), each with `BATCH` = 1, 64, 1024. Build mode, strong scaling, on the 128 MB corpus only, 1 warm-up + 5 repetitions, workers `1 2 4 6 8 12 16 22`. Read speedup, CPU utilization and voluntary context switches (blocking). The parameter file is `bench/params-q1.sh` (292 runs, estimated at 66 minutes, accepted: see design.md, Run conditions, for the calibration). P = 16 and the 14-worker point are not in this experiment (they stay in `params.sh`); the P = 16 figure in the prediction below is a calculation, not a measurement here.
+**Experiment.** `global-lock` and `partition-lock` (P = 4, 64), each with `BATCH` = 1, 64, 1024. Build mode, strong scaling, 128 MB corpus, workers 1 2 4 6 8 12 16 22, 1 warm-up + 5 repetitions: `./bench/run.sh bench/params-q1.sh` (292 runs, estimated at 66 minutes, accepted: see design.md, Run conditions, for the calibration). Read speedup, CPU utilization and voluntary context switches (blocking). P = 16 and the 14-worker point are not in this experiment (they stay in `params.sh`).
 
 **Prediction.**
 
 - `global-lock` with batch 1 is slower than `sequential` already at 2 workers and gets worse: every posting pays a cache-line transfer.
 - `global-lock` with batch 1024 peaks at 1.5–2×: tokenizing runs in parallel, inserting does not.
-- `partition-lock` is capped by its hottest partition. The partition holding "the" receives about 6% of postings (an assumption, to be counted on the corpus) plus its 1/P share of the rest: about 12% at P = 16 and 7.5% at P = 64. That bounds the insert phase at about 8× and 13×, so 64 partitions beat 16, but by much less than 4×.
-- Batching matters more than partition count: batch 1 to 64 improves more than P = 4 to 64.
+- `partition-lock` is capped by its hottest partition. The partition holding "the" receives about 6% of postings (an assumption, to be counted on the corpus) plus its 1/P share of the rest: about 30% at P = 4 and 7.5% at P = 64. That bounds the insert phase at about 3.4× and 13×: with P = 4 the curve flattens early, with P = 64 there is much more room, though the gain is far below the 16× ratio in lock count.
+- Batching matters more than partition count: batch 1 to 64 improves more than P = 4 to 64, at least below the P = 4 ceiling. Above 6 workers, lock effects and the end of the P-cores mix; Q1's conclusions are drawn mainly up to 6 workers, and `private-merge` (Q2) gives the lock-free reference above that.
 
 **What would surprise us.** `partition-lock` scaling beyond 13× would mean the hot-term bound is wrong, for example because tokenizing dominates the work.
 
+#### Q1 results (sweep of 2026-11-15)
+
+The answer to Q1: at batch 1 both costs matter, but as soon as the batch is reasonable, **contention dominates**: one lock serializes about half of the work, and only more locks (partitions) shorten the queue. This contradicts the prediction that batching matters more than partition count, and the reason is measured below.
+
+The predictions above are kept as written before the measurement; this section records how each one fared.
+
+**Run.** `results/q1/20261115-204137/`: 292 runs × (1 warm-up + 5), 58 minutes, no failures, performance profile, on AC, no swap. The largest coefficient of variation per point is 12% (Java), 9.3% (C), 5.8% (Go), 5.2% (C++), so differences under about 10% are not reliable. Speedup = median `build_ns` of the language's `sequential` / median of the variant.
+
+| Point | Java | Go | C++ | C |
+| --- | --- | --- | --- | --- |
+| `global-lock` B1, 2 workers | 0.90 | 0.62 | 0.72 | 0.62 |
+| `global-lock` B1, 22 workers | 0.59 | 0.48 | 0.22 | 0.15 |
+| `global-lock` B1024, peak | 1.68 (4 w) | 1.29 (22 w) | 1.41 (2 w) | 1.36 (2 w) |
+| `partition-lock` P4, peak | 2.82 | 2.22 | 2.97 | 2.70 |
+| `partition-lock` P64, peak | 4.27 | 3.32 | 5.60 | 4.43 |
+| Overhead at 1 worker, `global-lock` B1 | 1.39× | 2.0× | 1.37× | 1.23× |
+
+**1. A lock per posting is worse than no parallelism: confirmed, more strongly than predicted.** `global-lock` with batch 1 is below `sequential` at every worker count in every language. In C and C++ it collapses to 0.15× and 0.22× at 22 workers while keeping 15–18 cores busy. The context switches explain it: about 7.7 million per repetition in C++. Threads spend their time falling asleep on the lock and being woken up; the busy cores are the operating system managing the waiting, not index work. Go is the exception: it does not collapse (0.48×) and has 10–60× fewer context switches, because its mutex parks a waiting goroutine inside the runtime without involving the operating system.
+
+**2. The serial fraction, measured: confirmed.** `global-lock` with batch 1024, where taking the lock costs almost nothing, stops at 1.4–1.7× (Go is the outlier, still rising at 1.29× at 22 workers). Against its own 1-worker time the peak is about 2× in Java and 1.45× in C, so by Amdahl's law writing is about **50–70% of the work**. This was the number every other prediction rested on.
+
+**3. Batching matters more than partition count: contradicted.** At 22 workers, going from 4 to 64 partitions gains as much as, or more than, going from batch 1 to batch 64 in three languages out of four (Java and Go against, C++ a tie within noise, only C for). The prediction assumed the main cost was *taking* the lock (overhead). Result 2 rules that out: even at batch 1024, where acquisitions are almost free, a single lock caps at about 1.5×. The real problem is that one lock serializes half of the work. Batching reduces the trips to the lock but not the queue; only more locks shorten the queue.
+
+**4. The hot-partition bound: holds at P = 4, not the limit at P = 64.** At P = 4 the bound is about 3.4× and the measured peaks are 2.2–3.0×, which fits. At P = 64 the bound is about 13×, but the best speedup is 3.3–5.6× while 17–18 cores are busy at 22 workers. Something other than the hot lock limits it; the likely candidates are the hardware: shared memory bandwidth (inserting into a large hash map jumps randomly through RAM) and the slower E-cores. Q1 alone cannot tell; `private-merge` (Q2) can: if it also stops near 5× with no locks at all, the limit is the hardware.
+
+**Two further observations.**
+
+- **Batch 64 beats batch 1024 at high worker counts** (Java, Go, C; C++ the exception, with B1024 slightly ahead). A large batch holds the lock longer (1024 inserts in a row), so waiting threads wait longer; and 64 buffers of 1024 postings per worker no longer fit in the cache.
+- **C at batch 1024 has many more context switches** than the other languages at the same point (13–47 thousand against 3–5 thousand). A hypothesis, not yet tested: memory allocation (`malloc`) under many threads.
+
+Scaling beyond 13×, the surprise named above, did not happen: the maximum speedup is 5.6×.
+
 ### Q2. Is sharing worth it at all?
+
+**The strategy in short.** In Q1 every worker writes into one shared index and pays for locks. Q2 asks what happens if nothing is shared: is it cheaper for each worker to work alone, even though everything must be combined at the end?
+
+Picture ten people compiling a dictionary:
+
+- **Share** (`partition-lock`): one notebook, and they take turns writing in it. Time is lost waiting.
+- **Replicate** (`private-merge`): each has their own notebook and never waits. At the end all the notebooks are copied into one, and ten notebooks are needed, each with its own copy of "the".
+
+The two prices compared:
+
+|  | Share | Replicate |
+| --- | --- | --- |
+| While building | synchronization (locks, waiting) | none |
+| At the end | nothing | the merge |
+| Memory | one index | N indexes, the common vocabulary repeated |
+
+How the experiment answers:
+
+- **The two costs land in different columns.** `private-merge` records the lock-free build of the private indexes in `build_ns` and the merge in `finalize_ns`. So the result shows not only who wins, but where the time goes: how much the build saves and how much the merge gives back.
+- **The comparison is against the champion.** The total (build + finalize) of `private-merge` is compared with the total of the best `partition-lock` configuration found in Q1, not an arbitrary one.
+- **The knob is the number of workers.** As N grows, the private build gets faster (more people writing in parallel), but the merge combines more notebooks and memory grows with more copies of the vocabulary. The interesting point is where the two trends cross.
+- **Strong and weak scaling say different things.** Strong (same corpus, more workers) shows who is faster, and up to how many workers. Weak (corpus growing with the workers) has no locks at all, so if its time does not stay flat, the limit is the hardware (memory shared by all cores), not synchronization.
+
+How the result is read:
+
+| If we see… | It means… |
+| --- | --- |
+| `private-merge` total below `partition-lock` total | replicating pays: the merge costs less than all the locking it saves |
+| a very fast build but a huge finalize | the merge eats the gain |
+| `partition-lock` wins | locks are cheap, and synchronizing costs less than copying |
+| `private-merge` also stops scaling | the limit is the hardware (memory, core types), not locks |
+
+**An extra role: `private-merge` closes Q1.** Above 6 workers, Q1 alone cannot tell whether a curve bends because of locks or because the P-cores run out. `private-merge` has no locks, so its curve shows what the hardware allows by itself. If it bends at 6 too, the bend is the hardware; if it keeps rising while `partition-lock` stops, the bend is the locks.
+
+In one sentence: measure the price of sharing (locks) and of replicating (merge and memory) separately, compare totals against the best `partition-lock`, and use the lock-free curve as the hardware reference for every variant.
 
 **Fundamentals.**
 
@@ -356,18 +449,18 @@ Four core variants in all four languages (16 implementations) answer Q1–Q4 and
 
 - **Dynamic handout.** Workers take documents from a shared counter; only `private-merge-static` splits them up front, to show what that costs.
 - **Batch buffers.** Each worker keeps one private buffer of postings per lock: one in `global-lock`, one per partition in `partition-lock`. A buffer is flushed, under its lock, when it holds exactly `BATCH` postings, whichever documents they come from, and every buffer is flushed at the end of each phase. Without buffers that cross documents, `BATCH` 1024 could never fill and `partition-lock` would take about P locks per document whatever `BATCH` is.
-- **Overhead at one worker.** The `sequential` variant keeps its counting shortcut (a term seen earlier in the same document is the last posting of its list); the concurrent variants count terms in a private per-document map and buffer their postings. A variant's overhead at 1 worker therefore includes this work, not only synchronization.
 - **Posting lists always sorted.** Each new document ID is inserted in its correct place, almost always at or next to the end, so queries can merge lists directly.
 - **Partial visibility in mixed modes.** A query reads lists as they are and may see a half-inserted document. It is the simplest to implement and adds no cost to compare.
 - **Insert order of partitions.** In `partition-lock`, worker `w` visits partitions starting from `w mod P` and wrapping around (when it fills buffers and when it flushes), taking one lock at a time, so that workers do not all queue at partition 0. Queries use the fixed lock order below.
 - **Fixed lock order.** An AND or OR query must read both lists at the same time, so it holds both partition locks, always taking the lower partition number first (once if both terms share a partition). Because every thread takes locks in the same order, two threads can never each hold the lock the other needs, so a deadlock is impossible.
 - **Partition hash.** FNV-1a 64-bit of the term's UTF-8 bytes; the partition is (hash >> 32) mod P, the same in every language, so each partition holds the same terms everywhere. The high bits are used because C's hash map picks its slot from the low bits of the same hash; using those too would crowd each partition's terms into a fraction of C's slots.
 - **Locks.** Each language's plain default, non-fair mutex: Java `ReentrantLock`, Go `sync.Mutex`, C++ `std::mutex`, C `pthread_mutex_t`. Non-fair means a running thread may take a free lock before a waiting one: faster, with a small risk that one thread waits long.
+- **`sequential` stays the best sequential program.** It keeps its counting shortcut, so absolute speedup is measured against the fastest single-threaded version. A variant's overhead at 1 worker therefore includes its per-document counting, not only synchronization.
 
 ### How each variant works
 
-- **`global-lock`.** Workers tokenize their document in parallel and collect its postings in a private buffer; when the buffer holds `batch` postings (from one or several documents) the worker takes the one index lock and inserts them all, and flushes the rest at the end of each phase. Queries take the same lock. The simplest correct design, and the floor every other variant must beat.
-- **`partition-lock`.** The index is P sub-maps. A worker groups its document's postings by partition into one private buffer per partition (it visits the partitions from `worker number mod P`, wrapping around); when a buffer holds `batch` postings (from one or several documents) the worker takes that partition's lock and inserts them all, and flushes the rest at the end of each phase. Queries lock only the partitions their terms live in.
+- **`global-lock`.** Workers tokenize their documents in parallel and collect the postings in one private buffer. When the buffer holds `batch` postings, the worker takes the one index lock and inserts them all; batches cross document boundaries, and every buffer is flushed at the end of the phase. Queries take the same lock. The simplest correct design, and the floor every other variant must beat.
+- **`partition-lock`.** The index is P sub-maps. A worker keeps one private buffer per partition and flushes a buffer under that partition's lock when it holds `batch` postings; batches cross documents, so `batch` really sets how often a lock is taken, and everything is flushed at the end. When a worker flushes several buffers at once, it visits partitions starting from (worker number mod P) and wraps around, so workers do not queue up at partition 0 one behind the other. Queries lock the partitions of their terms in fixed order (rules above).
 - **`private-merge`.** Everyone builds their own index, then the indexes are combined. Each worker builds a private index from the documents it takes, with no locks, already divided into N piles by term (the partition hash with P = N). At the end, worker i merges pile i of every worker, so all workers merge at once, each on different terms, with no locks. Each worker's lists are already sorted (it takes increasing IDs), so merging them is an N-way merge in document order. The result is an index partitioned by term, which queries use directly.
 - **`partition-writers`.** Each partition has exactly one owner, the only thread that writes it; everyone else sends it postings as messages. The owners are the workers themselves, so the variant uses exactly N threads like every other: each worker tokenizes documents and also owns 1/N of the partitions. Postings for another worker's partition go into that worker's bounded queue (`queue` capacity, in batches of `batch`); a worker regularly empties its own queue into its partitions. Deadlock rule: before waiting on another worker's full queue, a worker empties its own, so someone always makes progress. Build and query modes only: owners write without locks, so a query could not safely read during writes; in query mode nobody writes any more.
 - **`private-merge-static`.** `private-merge` with documents split into N equal ranges up front. In C only, because C has no garbage collector or JIT adding runtime threads that would blur the scheduling effect.
