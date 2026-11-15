@@ -378,6 +378,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Go.** `PrivateMergeIndex`; the piles are `map[string]*PostingList`, the merge runs on `RunWorkers`; a term is cloned (`strings.Clone`) when it becomes a new key in a private pile, as in the other variants. **Cross-check against Java:** identical dumps in build and query mode at 1, 8 and 22 workers, and the same query sums (2,335,481 at 8 workers, 2,326,650 at 22).
 
+**C++.** `PrivateMergeIndex` (header `private_merge_index.hpp`); the piles are `unordered_map<std::string, PostingList>`, a term is copied only when it is new in a private pile (`try_emplace`). The merge moves the map nodes (`extract` / `insert` of a node handle), so the first list of a term reaches the merged pile with its key and list moved, nothing copied; the further lists of a term wait in a side table keyed by `string_view` and are merged with the first at the end. The merge runs on `runWorkers`. **Cross-check against Java:** the same dumps and query sums at 1, 8 and 22 workers.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
