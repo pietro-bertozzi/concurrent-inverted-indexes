@@ -9,11 +9,12 @@ type SequentialIndex struct {
 	m        map[string]*PostingList
 	docs     int
 	postings int64
+	engine   *QueryEngine
 }
 
 // NewSequentialIndex returns an empty index.
 func NewSequentialIndex() *SequentialIndex {
-	return &SequentialIndex{m: make(map[string]*PostingList)}
+	return &SequentialIndex{m: make(map[string]*PostingList), engine: NewQueryEngine()}
 }
 
 func (x *SequentialIndex) Add(docID int, doc string) {
@@ -37,6 +38,11 @@ func (x *SequentialIndex) Add(docID int, doc string) {
 	}
 	x.docs++
 }
+
+// Worker: only one worker exists, the index is its own handle.
+func (x *SequentialIndex) Worker() Worker { return x }
+
+func (x *SequentialIndex) Query(q *Queries, i int) int { return x.engine.Run(x, q, i) }
 
 func (x *SequentialIndex) Get(term string) *PostingList { return x.m[term] }
 

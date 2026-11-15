@@ -19,7 +19,9 @@ type Args struct {
 	Seed                    uint64 // query and mixed modes
 	Latencies               string // query and mixed modes
 	Dump                    string // optional, "" if absent
-	values                  map[string]string
+	// Numeric parameters; 0 if absent (a variant checks the ones it uses).
+	Partitions, Batch, Queue int
+	values                   map[string]string
 }
 
 var knownOptions = map[string]bool{"mode": true, "input": true, "threads": true, "repeat": true,
@@ -99,6 +101,13 @@ func ParseArgs(argv []string) (*Args, error) {
 	if mixed {
 		if a.Preload, err = a.integer("preload", 0); err != nil {
 			return nil, err
+		}
+	}
+	for name, field := range map[string]*int{"partitions": &a.Partitions, "batch": &a.Batch, "queue": &a.Queue} {
+		if a.Has(name) {
+			if *field, err = a.integer(name, 1); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return a, nil

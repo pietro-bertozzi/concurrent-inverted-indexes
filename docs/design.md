@@ -357,6 +357,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Java.** `Workers.run` starts one platform `Thread` per worker and joins them; a failure in a worker is rethrown in the main thread. Locks are `ReentrantLock` (default, non-fair). `PartitionHash` encodes UTF-8 by hand, code point by code point, to avoid a byte array per term.
 
+**Go.** `RunWorkers` starts one goroutine per worker and waits with a `sync.WaitGroup` (a panic in a goroutine ends the process with a non-zero status); the counter is `atomic.Int64`, `docs` an `atomic.Int64` too. Locks are `sync.Mutex`. `DocPostings` counts in a `map[string]int32` that is emptied (`clear`) for every document; its terms are substrings of the document line, and the index clones a term (`strings.Clone`) when it becomes a new key, as in the sequential variant. `PartitionOf` hashes the bytes of the Go string directly (already UTF-8). Both variants declare no `max_threads`; `main.go` passes `math.MaxInt32`. **Cross-check against Java** (8 MB corpus, 8 workers, 1 warm-up + 1 repetition, `--ops 3000`, `--preload 500`): identical dumps in all five modes against the sequential dump, and the same sum of query result sizes as Java at 8 workers (2,335,481; the sum depends on the worker count, because each worker starts at its own offset in the query file).
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.

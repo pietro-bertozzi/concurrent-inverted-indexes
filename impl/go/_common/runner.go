@@ -19,13 +19,14 @@ import (
 // Every repetition starts from scratch: the input is read again, the index is new, the
 // generators restart from --seed, so all repetitions do identical work.
 //
-// Only one worker is supported for now (the sequential variant); the operation plan is
-// already per worker, so concurrent variants add their goroutines here later.
+// Every phase runs on N worker goroutines (also with N = 1): documents are handed out from a
+// shared counter (IndexDocs), and each worker follows its own operation plan (OpPlan).
 
 // Run is the entry point of a variant: maxThreads is the highest worker count it supports,
-// factory makes an empty index, uses lists the numeric parameters (partitions, batch, queue)
-// the variant accepts. It exits with status 1 on error.
-func Run(argv []string, maxThreads int, factory func() Index, uses ...string) {
+// factory makes an empty index from the command line (the variant reads the numeric
+// parameters it uses), uses lists those parameters (partitions, batch, queue). It exits with
+// status 1 on error.
+func Run(argv []string, maxThreads int, factory func(a *Args) Index, uses ...string) {
 	a, err := ParseArgs(argv)
 	if err == nil {
 		err = execute(a, maxThreads, factory, uses)
@@ -53,13 +54,17 @@ func clockCostNs() int64 {
 	return total / n
 }
 
-func execute(a *Args, maxThreads int, factory func() Index, uses []string) error {
+func execute(a *Args, maxThreads int, factory func(a *Args) Index, uses []string) error {
 	if a.Threads > maxThreads {
 		return fmt.Errorf("this variant supports at most %d worker(s), got --threads %d", maxThreads, a.Threads)
 	}
 	for _, name := range []string{"partitions", "batch", "queue"} {
-		if a.Has(name) && !contains(uses, name) {
+		used := contains(uses, name)
+		if a.Has(name) && !used {
 			return fmt.Errorf("option --%s is not used by this variant", name)
+		}
+		if !a.Has(name) && used {
+			return fmt.Errorf("missing required option --%s for this variant", name)
 		}
 	}
 	build := a.Mode == "build"
@@ -95,7 +100,7 @@ func execute(a *Args, maxThreads int, factory func() Index, uses []string) error
 }
 
 // repetition is one repetition: load, index (build / preload), run, finish; prints its row.
-func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory func() Index, latencies *bufio.Writer) error {
+func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory func(a *Args) Index, latencies *bufio.Writer) error {
 	build := a.Mode == "build"
 	mixed := strings.HasPrefix(a.Mode, "mixed-")
 	share := InsertShare(a.Mode)
@@ -114,26 +119,35 @@ func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory f
 		return fmt.Errorf("%s has no documents", a.Input)
 	}
 
-	// The plan (the operation order) is made before timing starts.
-	var plan *OpPlan
+	// The plans (the operation order of every worker) are made before timing starts.
+	n := a.Threads
+	var plans []*OpPlan
+	opsQuery, opsInsert := 0, 0
 	if !build {
 		inserts := TotalInserts(a.Ops, share)
 		if a.Preload+inserts > len(docs) {
 			return fmt.Errorf("mixed run needs %d documents (preload %d + %d inserts) but %s has %d",
 				a.Preload+inserts, a.Preload, inserts, a.Input, len(docs))
 		}
-		plan = MakeOpPlan(a.Ops, share, a.Threads, 0, a.Seed, queries.Size()) // worker 0 (the only one)
+		plans = make([]*OpPlan, n)
+		for w := 0; w < n; w++ {
+			plans[w] = MakeOpPlan(a.Ops, share, n, w, a.Seed, queries.Size())
+			opsQuery += plans[w].Queries
+			opsInsert += plans[w].Inserts
+		}
 	}
 
-	index := factory()
+	index := factory(a)
+	workers := make([]Worker, n) // one handle per worker, made before timing
+	for w := range workers {
+		workers[w] = index.Worker()
+	}
 	var preloadNs, buildNs, runNs, finalizeNs, resultTotal int64
-	var latency []int64
+	var latency [][]int64
 
 	if build || a.Mode == "query" {
 		t = time.Now()
-		for d := range docs {
-			index.Add(d, docs[d])
-		}
+		IndexDocs(workers, docs, 0, len(docs))
 		buildNs = time.Since(t).Nanoseconds()
 		if !build { // queries need the finished index
 			t = time.Now()
@@ -142,9 +156,7 @@ func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory f
 		}
 	} else {
 		t = time.Now()
-		for d := 0; d < a.Preload; d++ {
-			index.Add(d, docs[d])
-		}
+		IndexDocs(workers, docs, 0, a.Preload)
 		preloadNs = time.Since(t).Nanoseconds()
 	}
 	if build {
@@ -154,28 +166,21 @@ func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory f
 	}
 
 	if !build {
-		latency = make([]int64, plan.Queries)
-		engine := NewQueryEngine()
+		latency = make([][]int64, n)
+		for w := range latency {
+			latency[w] = make([]int64, plans[w].Queries)
+		}
+		results := make([]int64, n)
 		var nextDoc atomic.Int64 // the shared insert counter
 		nextDoc.Store(int64(a.Preload))
-		cursor, li := plan.QueryOffset, 0
 		t = time.Now()
-		for _, typ := range plan.Types {
-			if typ == OpQuery {
-				start := time.Now()
-				resultTotal += int64(engine.Run(index, queries, cursor))
-				latency[li] = time.Since(start).Nanoseconds()
-				li++
-				cursor++
-				if cursor == queries.Size() {
-					cursor = 0
-				}
-			} else {
-				d := int(nextDoc.Add(1) - 1)
-				index.Add(d, docs[d])
-			}
-		}
+		RunWorkers(n, func(w int) {
+			results[w] = runPlan(workers[w], plans[w], queries, docs, &nextDoc, latency[w])
+		})
 		runNs = time.Since(t).Nanoseconds()
+		for _, r := range results {
+			resultTotal += r
+		}
 		if mixed {
 			t = time.Now()
 			index.Finish()
@@ -193,10 +198,6 @@ func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory f
 	if err != nil {
 		return err
 	}
-	opsQuery, opsInsert := 0, 0
-	if !build {
-		opsQuery, opsInsert = plan.Queries, plan.Inserts
-	}
 	w := 0
 	if warmup {
 		w = 1
@@ -208,14 +209,39 @@ func repetition(a *Args, rep int, warmup, last bool, queries *Queries, factory f
 		itoa(peak), itoa(used.UserNs), itoa(used.SysNs), itoa(used.CtxVol), itoa(used.CtxInvol)}, "\t")
 
 	// After the timers have stopped: the latencies, the row, the dump.
-	if latency != nil {
-		writeLatencies(latencies, rep, w, latency)
+	for _, l := range latency {
+		writeLatencies(latencies, rep, w, l)
 	}
 	fmt.Println(row)
 	if a.Dump != "" && last {
 		return WriteDump(index, a.Dump)
 	}
 	return nil
+}
+
+// runPlan is one worker's share of the timed phase: it follows its plan, timing every query
+// with two clock readings around it. An insert takes the next document from the shared counter
+// (whichever worker inserts next takes the next document). It returns the sum of the query
+// result sizes.
+func runPlan(me Worker, plan *OpPlan, queries *Queries, docs []string, nextDoc *atomic.Int64, latency []int64) int64 {
+	var total int64
+	cursor, li := plan.QueryOffset, 0
+	for _, typ := range plan.Types {
+		if typ == OpQuery {
+			start := time.Now()
+			total += int64(me.Query(queries, cursor))
+			latency[li] = time.Since(start).Nanoseconds()
+			li++
+			cursor++
+			if cursor == queries.Size() {
+				cursor = 0
+			}
+		} else {
+			d := int(nextDoc.Add(1) - 1)
+			me.Add(d, docs[d])
+		}
+	}
+	return total
 }
 
 // load reads the input file: one string per line (document ID = position).

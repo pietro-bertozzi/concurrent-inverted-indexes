@@ -2,7 +2,7 @@ package main
 
 import "os"
 
-// Go sequential variant: one worker, one built-in map, no locks.
+// Go sequential variant: one worker goroutine, one built-in map, no locks.
 func main() {
-	Run(os.Args[1:], 1, func() Index { return NewSequentialIndex() })
+	Run(os.Args[1:], 1, func(a *Args) Index { return NewSequentialIndex() })
 }
