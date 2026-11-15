@@ -245,7 +245,8 @@ static void destroy(Index *self) {
     free(x);
 }
 
-Index *private_merge_index_new(const Args *args) {
+// Makes an empty index for args->threads workers; static_split chooses how documents are handed out.
+static Index *new_index(const Args *args, int static_split) {
     PrivateMergeIndex *x = xcalloc(1, sizeof(PrivateMergeIndex));
     x->base.worker = worker;
     x->base.get = get;
@@ -255,6 +256,11 @@ Index *private_merge_index_new(const Args *args) {
     x->base.postings = postings;
     x->base.each = each;
     x->base.destroy = destroy;
+    x->base.static_split = static_split;
     x->n = args->threads;
     return &x->base;
 }
+
+Index *private_merge_index_new(const Args *args) { return new_index(args, 0); }
+
+Index *private_merge_static_index_new(const Args *args) { return new_index(args, 1); }

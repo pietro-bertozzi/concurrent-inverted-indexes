@@ -8,5 +8,9 @@
 #include "args.h"
 #include "index.h"
 
-// Creates an empty index for args->threads workers.
+// Creates an empty index for args->threads workers (documents handed out dynamically).
 Index *private_merge_index_new(const Args *args);
+
+// The same index, with the documents split into args->threads equal ranges up front
+// (private-merge-static): only the handout differs.
+Index *private_merge_static_index_new(const Args *args);

@@ -16,5 +16,8 @@ void workers_run(int n, WorkerBody body, void *context);
 // Indexes the documents from (inclusive) to to (exclusive), given as lines (pointer, length):
 // each worker repeatedly takes the next document ID from a shared atomic counter
 // (d = counter++) and adds it. The counter is touched once per document, not once per word,
-// so it costs almost nothing.
-void workers_index(Worker **workers, int n, char *const *line, const size_t *length, int from, int to);
+// so it costs almost nothing. With static_split (private-merge-static only) the documents are
+// instead split up front into n ranges of (to - from) / n documents, worker w taking the w-th
+// range in increasing order, so a slow worker does not hand work to a fast one.
+void workers_index(Worker **workers, int n, char *const *line, const size_t *length, int from, int to,
+                   int static_split);

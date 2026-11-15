@@ -32,6 +32,11 @@ struct Worker {
 };
 
 struct Index {
+    // How documents are handed out (docs/experiment-plan.md, Rules every variant follows): 0, the
+    // default of every variant, takes them from a shared counter; 1 splits them into N equal
+    // ranges up front, worker w taking range w (only private-merge-static). Set by the variant's
+    // constructor; read by workers_index.
+    int static_split;
     // Makes the handle of worker `number` (0-based); called before timing starts. The index
     // owns it and frees it in destroy.
     Worker *(*worker)(Index *self, int number);

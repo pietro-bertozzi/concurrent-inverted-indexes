@@ -163,7 +163,7 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
 
     if (build || strcmp(a->mode, "query") == 0) {
         t = now_ns();
-        workers_index(workers, n, docs.line, docs.length, 0, docs.count);
+        workers_index(workers, n, docs.line, docs.length, 0, docs.count, index->static_split);
         build_ns = now_ns() - t;
         if (!build) {                       // queries need the finished index
             t = now_ns();
@@ -172,7 +172,7 @@ static void repetition(const Args *a, int rep, int warmup, int last, const Queri
         }
     } else {
         t = now_ns();
-        workers_index(workers, n, docs.line, docs.length, 0, a->preload);
+        workers_index(workers, n, docs.line, docs.length, 0, a->preload, index->static_split);
         preload_ns = now_ns() - t;
     }
     if (build) {
