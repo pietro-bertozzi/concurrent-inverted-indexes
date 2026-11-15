@@ -416,6 +416,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Java.** `PartitionRwLockIndex`: `ReentrantReadWriteLock` per partition, `writeLock()` in the flush, `readLock()` in `query`. **Cross-check:** `check.sh` passes at every worker count of `params.sh` (45 runs: five modes × nine worker counts).
 
+**C.** `partition_rwlock_index.c`: `pthread_rwlock_t` per partition with default attributes, `pthread_rwlock_wrlock` in the flush, `pthread_rwlock_rdlock` in `query`. **Cross-check:** `check.sh` passes at every worker count of `params.sh` (45 runs); ThreadSanitizer and AddressSanitizer + UBSan report nothing in query, mixed-50-50 and mixed-95-5 (4 MB corpus, 8 workers, `--partitions 16 --batch 4`).
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
