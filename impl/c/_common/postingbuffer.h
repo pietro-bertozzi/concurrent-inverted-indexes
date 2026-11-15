@@ -18,8 +18,11 @@ typedef struct {
     int capacity;
 } PostingBuffer;
 
-// Creates an empty buffer.
+// Creates an empty buffer with room for 64 postings.
 void postingbuffer_init(PostingBuffer *b);
+
+// Creates an empty buffer with room for `capacity` (at least 1) postings.
+void postingbuffer_init_with(PostingBuffer *b, int capacity);
 
 // Frees the buffer.
 void postingbuffer_destroy(PostingBuffer *b);

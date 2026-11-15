@@ -4,8 +4,10 @@
 
 #include "util.h"
 
-void postingbuffer_init(PostingBuffer *b) {
-    b->capacity = 64;
+void postingbuffer_init(PostingBuffer *b) { postingbuffer_init_with(b, 64); }
+
+void postingbuffer_init_with(PostingBuffer *b, int capacity) {
+    b->capacity = capacity;
     b->size = 0;
     b->terms = xmalloc((size_t)b->capacity * sizeof(char *));
     b->lengths = xmalloc((size_t)b->capacity * sizeof(size_t));

@@ -1,0 +1,6 @@
+partitioning	by-term
+writer	writer-per-partition
+coordination	lock
+write_timing	immediate
+uses	partitions,batch,queue
+modes	build,query
