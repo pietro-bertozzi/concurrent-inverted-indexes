@@ -42,7 +42,7 @@ Run the benchmark:
 ./bench/run.sh bench/params.sh          main experiment (unpinned)
 ./bench/run.sh bench/params-pinned.sh   control experiment pinned to the P-cores
 ./bench/run.sh bench/params-quick.sh    small sweep for development
-./bench/run.sh bench/params-q1.sh       experiment Q1 (build, 128 MB, locks and batching), meant to take at most one hour
+./bench/run.sh bench/params-q1.sh       experiment Q1 (build, 128 MB, locks and batching), meant to take about one hour (66 minutes estimated)
 ```
 
 Check that every variant builds the right index (dump of the test data in `data/tiny/`

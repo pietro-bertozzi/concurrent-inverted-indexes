@@ -1,5 +1,5 @@
 # Numeric parameters of experiment Q1 (docs/experiment-plan.md): is the cost the lock itself or
-# how often it is taken? Build mode, strong scaling, 128 MB corpus, one hour at most
+# how often it is taken? Build mode, strong scaling, 128 MB corpus, about one hour (at most 70 minutes estimated)
 # (docs/design.md, Run conditions). Everything not named in the plan is as in params.sh.
 #
 # Numeric parameters for the full measurements. Plain bash, read with `source`.
@@ -70,7 +70,7 @@ WARMUP=1
 # Limit per run, in the format of `timeout` (60m = 60 minutes): about 9x the slowest
 # sequential run (a 2048 MB build, 11 repetitions, about 7 minutes; design.md, Sizing
 # measurements); to be tightened after the first full runs.
-TIMEOUT=60m
+TIMEOUT=5m
 
 # Pause in seconds before every run, to let the laptop cool down.
 COOLDOWN=3

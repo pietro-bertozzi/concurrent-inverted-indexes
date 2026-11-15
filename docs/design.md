@@ -53,7 +53,7 @@ bench/
   params.sh         numeric parameters of the main experiment (lists of values)
   params-pinned.sh  control experiment pinned to P-cores (smaller sweep)
   params-quick.sh   small sweep for development
-  params-q1.sh      experiment Q1 (docs/experiment-plan.md), one hour at most
+  params-q1.sh      experiment Q1 (docs/experiment-plan.md), about one hour
 corpus/             preprocessing scripts (raw Wikipedia → corpus, queries)
 data/               generated corpus prefixes and query files
 impl/
@@ -656,11 +656,11 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 - Plugged in, performance power profile, other programs closed. The runner records the power source, swap use and CPU power profile (platform profile, governor, energy preference) in `meta.txt` before and after the sweep, and warns, without stopping, on battery power or if swap pages were moved during the sweep. The profile is recorded, not enforced; any warning is reported with the results.
 - Cool-down pauses between runs and randomized run order. *Why: thin laptops throttle when hot.*
 - Per-repetition rows make throttling visible as variability.
-- **Every experiment (one params file per question) finishes in at most one hour, builds included.** *Why: a sweep that long can be run, repeated after a fix and kept under the same room temperature and power state; the full `params.sh` sweep is estimated at about 135 hours (range 120-250), which cannot be repeated or even run in one sitting.* The duration of a params file is estimated from a calibration run before it is used (short runs of each variant at a few worker counts, scaled to the run list), and a file whose estimate exceeds 55 minutes (5 minutes of margin) is cut down before it is run, never run as it is.
+- **Every experiment (one params file per question) takes about one hour, builds included: at most 70 minutes estimated.** *Why: a sweep that long can be run, repeated after a fix and kept under the same room temperature and power state; the full `params.sh` sweep is estimated at about 135 hours (range 120-250), which cannot be repeated or even run in one sitting.* The duration of a params file is estimated from a calibration run before it is used (short runs of each variant at a few worker counts, scaled to the run list), and a file whose estimate exceeds 70 minutes is cut down before it is run, never run as it is.
 
 ### Experiment Q1 (`bench/params-q1.sh`)
 
-`EXPERIMENT=q1`, `MODES=build`, `SCALING=strong`, `CORPORA_MB` = `CORPUS_BASE_MB` = `QUERY_CORPUS_MB` = 128, `THREADS="1 2 4 6 8 12 16 22"`, `PARTITIONS="4 64"`, `BATCH="1 64 1024"`, `REPEAT=5`, `WARMUP=1`, `COOLDOWN=3`; every other value is the one of `params.sh` (also `TIMEOUT=60m`, which is far above any run of this experiment; a lower value would detect a hung run sooner). It passes the runner's validation unchanged and gives **292 runs**: per language 24 of `global-lock` (8 worker counts × 3 batches), 48 of `partition-lock` (× 2 partitions) and 1 of `sequential`. It is the experiment of question Q1 and runs on the 128 MB corpus only.
+`EXPERIMENT=q1`, `MODES=build`, `SCALING=strong`, `CORPORA_MB` = `CORPUS_BASE_MB` = `QUERY_CORPUS_MB` = 128, `THREADS="1 2 4 6 8 12 16 22"`, `PARTITIONS="4 64"`, `BATCH="1 64 1024"`, `REPEAT=5`, `WARMUP=1`, `COOLDOWN=3`; every other value is the one of `params.sh` except `TIMEOUT=5m` (the slowest run is about 30 s, so a hung run is detected after 5 minutes instead of 60). It passes the runner's validation unchanged and gives **292 runs**: per language 24 of `global-lock` (8 worker counts × 3 batches), 48 of `partition-lock` (× 2 partitions) and 1 of `sequential`. It is the experiment of question Q1 and runs on the 128 MB corpus only.
 
 *Duration estimate.* Calibration on 2026-11-15 (build mode, 128 MB, 1 warm-up + 2 repetitions, one run per variant and language at 1, 8 and 22 workers, batch 1 and 1024, partition-lock at 4 and 64 partitions; 7 min 19 s for 76 runs). Seconds per repetition (load + build + finalize), selected rows:
 
@@ -671,7 +671,7 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 | c++ | 1.90 | 2.60 / 7.82 | 1.99 | 2.05 / 0.35 |
 | c | 1.15 | 1.34 / 6.68 | 1.30 | 1.16 / 0.33 |
 
-Other worker counts are interpolated on a log scale between the calibrated ones, batch 64 between batch 1 and 1024 on a log scale (so probably a little pessimistic). A run takes its fixed overhead (process start, from the calibration wall time) + 6 repetitions + the cool-down. Estimate: **66 minutes** (java 16.8, go 15.0, c++ 19.5, c 14.8; 14.6 of them cool-down), plus under a minute for the 12 builds. This is **over the 55-minute limit**: the largest single cost is `global-lock` with batch 1 at 8 or more workers in C and C++ (5 to 8 s per repetition, because the lock is contended on every posting). Candidate cuts (minutes after the cut): drop `BATCH` 64: 45; drop `PARTITIONS` 4: 47; drop worker counts 6 and 12: 51; drop 2 and 6: 50; `REPEAT=3`: 50; `COOLDOWN=1`: 56. The file is documented as it is; which value to cut is decided by the project owner.
+Other worker counts are interpolated on a log scale between the calibrated ones, batch 64 between batch 1 and 1024 on a log scale (so probably a little pessimistic). A run takes its fixed overhead (process start, from the calibration wall time) + 6 repetitions + the cool-down. Estimate: **66 minutes** (java 16.8, go 15.0, c++ 19.5, c 14.8; 14.6 of them cool-down), plus under a minute for the 12 builds. This is over the 55 minutes first proposed but **within the accepted limit (70 minutes)**, so `params-q1.sh` is accepted as it is: the largest single cost is `global-lock` with batch 1 at 8 or more workers in C and C++ (5 to 8 s per repetition, because the lock is contended on every posting). Candidate cuts (minutes after the cut): drop `BATCH` 64: 45; drop `PARTITIONS` 4: 47; drop worker counts 6 and 12: 51; drop 2 and 6: 50; `REPEAT=3`: 50; `COOLDOWN=1`: 56. The file is run as documented; the cuts are not applied.
 
 ## Open items
 
