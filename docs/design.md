@@ -53,6 +53,7 @@ bench/
   params.sh         numeric parameters of the main experiment (lists of values)
   params-pinned.sh  control experiment pinned to P-cores (smaller sweep)
   params-quick.sh   small sweep for development
+  params-q1.sh      experiment Q1 (docs/experiment-plan.md), one hour at most
 corpus/             preprocessing scripts (raw Wikipedia → corpus, queries)
 data/               generated corpus prefixes and query files
 impl/
@@ -139,13 +140,13 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
 | `TIMEOUT` | limit per run, as a number with an optional `s`, `m`, `h` or `d` suffix | 30m to start |
 
-**`CHECK_OPS=7`, `CHECK_PRELOAD=1` (all three params files).** `data/tiny/` has 6 documents and 7 queries, and three wishes cannot all hold: preload + floor(`CHECK_OPS` × 80 / 100) ≤ 6, `CHECK_OPS` > 7, and a preload above 0. With `CHECK_OPS` ≥ 8 the largest share already inserts 6 documents, which forces a preload of 0. *Why 7 and 1: wrap-around of the query file is still exercised, because every worker starts at a random offset and cycles past the end; a preload of 1 keeps the preload path tested (1 + floor(7 × 80 / 100) = 1 + 5 = 6 documents, exactly the corpus).*
+**`CHECK_OPS=7`, `CHECK_PRELOAD=1` (all params files).** `data/tiny/` has 6 documents and 7 queries, and three wishes cannot all hold: preload + floor(`CHECK_OPS` × 80 / 100) ≤ 6, `CHECK_OPS` > 7, and a preload above 0. With `CHECK_OPS` ≥ 8 the largest share already inserts 6 documents, which forces a preload of 0. *Why 7 and 1: wrap-around of the query file is still exercised, because every worker starts at a random offset and cycles past the end; a preload of 1 keeps the preload path tested (1 + floor(7 × 80 / 100) = 1 + 5 = 6 documents, exactly the corpus).*
 
 With `CHECK_OPS=7`, mixed-95-5 does floor(7 × 5 / 100) = 0 inserts, so inserts are checked only by mixed-50-50 and mixed-20-80; mixed-95-5 checks the preload and the queries.
 
 The file is plain bash, read with `source`. *Why: no parsing and no dependency; every implementation gets exactly the same values from one place.* Language is not a parameter: the folder says it.
 
-There are three params files with the same variable names: `params.sh` (the main, unpinned experiment), `params-pinned.sh` (the pinned control experiment, see Pinning) and `params-quick.sh` (development). The runner validates the file before doing anything: every variable defined, numbers and lists well-formed, `CORPUS_BASE_MB` and `QUERY_CORPUS_MB` listed in `CORPORA_MB`, and, if weak scaling of build is requested, every size base × N listed too.
+There are several params files with the same variable names: `params.sh` (the main, unpinned experiment), `params-pinned.sh` (the pinned control experiment, see Pinning), `params-quick.sh` (development) and one per question of `docs/experiment-plan.md`, so far `params-q1.sh` (section Run conditions). The runner validates the file before doing anything: every variable defined, numbers and lists well-formed, `CORPUS_BASE_MB` and `QUERY_CORPUS_MB` listed in `CORPORA_MB`, and, if weak scaling of build is requested, every size base × N listed too.
 
 ## Workload model
 
@@ -526,6 +527,7 @@ the	0:2 1:2
 ./bench/run.sh bench/params.sh          main experiment (unpinned)
 ./bench/run.sh bench/params-pinned.sh   control experiment pinned to P-cores
 ./bench/run.sh bench/params-quick.sh    small sweep for development
+./bench/run.sh bench/params-q1.sh       experiment Q1
 ```
 
 **What it does, in order**
@@ -654,6 +656,22 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 - Plugged in, performance power profile, other programs closed. The runner records the power source, swap use and CPU power profile (platform profile, governor, energy preference) in `meta.txt` before and after the sweep, and warns, without stopping, on battery power or if swap pages were moved during the sweep. The profile is recorded, not enforced; any warning is reported with the results.
 - Cool-down pauses between runs and randomized run order. *Why: thin laptops throttle when hot.*
 - Per-repetition rows make throttling visible as variability.
+- **Every experiment (one params file per question) finishes in at most one hour, builds included.** *Why: a sweep that long can be run, repeated after a fix and kept under the same room temperature and power state; the full `params.sh` sweep is estimated at about 135 hours (range 120-250), which cannot be repeated or even run in one sitting.* The duration of a params file is estimated from a calibration run before it is used (short runs of each variant at a few worker counts, scaled to the run list), and a file whose estimate exceeds 55 minutes (5 minutes of margin) is cut down before it is run, never run as it is.
+
+### Experiment Q1 (`bench/params-q1.sh`)
+
+`EXPERIMENT=q1`, `MODES=build`, `SCALING=strong`, `CORPORA_MB` = `CORPUS_BASE_MB` = `QUERY_CORPUS_MB` = 128, `THREADS="1 2 4 6 8 12 16 22"`, `PARTITIONS="4 64"`, `BATCH="1 64 1024"`, `REPEAT=5`, `WARMUP=1`, `COOLDOWN=3`; every other value is the one of `params.sh` (also `TIMEOUT=60m`, which is far above any run of this experiment; a lower value would detect a hung run sooner). It passes the runner's validation unchanged and gives **292 runs**: per language 24 of `global-lock` (8 worker counts × 3 batches), 48 of `partition-lock` (× 2 partitions) and 1 of `sequential`. It is the experiment of question Q1 and runs on the 128 MB corpus only.
+
+*Duration estimate.* Calibration on 2026-11-15 (build mode, 128 MB, 1 warm-up + 2 repetitions, one run per variant and language at 1, 8 and 22 workers, batch 1 and 1024, partition-lock at 4 and 64 partitions; 7 min 19 s for 76 runs). Seconds per repetition (load + build + finalize), selected rows:
+
+| language | sequential | global-lock 1 / 22 workers, batch 1 | global-lock 22, batch 1024 | partition-lock 64, batch 1024: 1 / 22 workers |
+|---|---|---|---|---|
+| java | 1.91 | 2.52 / 3.64 | 1.88 | 2.46 / 0.72 |
+| go | 1.31 | 2.61 / 2.81 | 1.04 | 2.35 / 0.46 |
+| c++ | 1.90 | 2.60 / 7.82 | 1.99 | 2.05 / 0.35 |
+| c | 1.15 | 1.34 / 6.68 | 1.30 | 1.16 / 0.33 |
+
+Other worker counts are interpolated on a log scale between the calibrated ones, batch 64 between batch 1 and 1024 on a log scale (so probably a little pessimistic). A run takes its fixed overhead (process start, from the calibration wall time) + 6 repetitions + the cool-down. Estimate: **66 minutes** (java 16.8, go 15.0, c++ 19.5, c 14.8; 14.6 of them cool-down), plus under a minute for the 12 builds. This is **over the 55-minute limit**: the largest single cost is `global-lock` with batch 1 at 8 or more workers in C and C++ (5 to 8 s per repetition, because the lock is contended on every posting). Candidate cuts (minutes after the cut): drop `BATCH` 64: 45; drop `PARTITIONS` 4: 47; drop worker counts 6 and 12: 51; drop 2 and 6: 50; `REPEAT=3`: 50; `COOLDOWN=1`: 56. The file is documented as it is; which value to cut is decided by the project owner.
 
 ## Open items
 

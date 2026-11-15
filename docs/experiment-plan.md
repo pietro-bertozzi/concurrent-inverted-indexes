@@ -8,6 +8,8 @@ This plan fixes which questions the benchmark answers and which concurrent varia
 
 It complements `docs/design.md`, which fixes the shared infrastructure (workload, data, CLI contract, results, methodology). Once agreed, the questions and the variant list move into `design.md` as a new section, and this plan becomes the report's backbone: each question below is meant to be one chapter of the results.
 
+**Time limit.** Every experiment (one params file per question) must finish in at most one hour, builds included (docs/design.md, Run conditions). The experiments below are therefore small, targeted sweeps, not one big sweep; `bench/params-q1.sh` is the first.
+
 Status: draft, to iterate. Nothing here is implemented yet; the four `sequential` baselines are done and sized.
 
 ## The problem space
@@ -227,7 +229,7 @@ Writing predictions first is deliberate. A result that confirms a prediction sho
 
 **Why it matters.** It separates two costs that look the same in a speedup curve: contention (waiting for the lock) and overhead (taking it). Reducing one does not fix the other.
 
-**Experiment.** `global-lock` and `partition-lock` (P = 4, 16, 64), each with `BATCH` = 1, 64, 1024. Build mode, strong scaling, 1 to 22 workers. Read speedup, CPU utilization and voluntary context switches (blocking).
+**Experiment.** `global-lock` and `partition-lock` (P = 4, 64), each with `BATCH` = 1, 64, 1024. Build mode, strong scaling, on the 128 MB corpus only, 1 warm-up + 5 repetitions, workers `1 2 4 6 8 12 16 22`. Read speedup, CPU utilization and voluntary context switches (blocking). The parameter file is `bench/params-q1.sh` (292 runs, estimated at 66 minutes against the limit of one hour: see design.md, Run conditions, for the calibration and the candidate cuts). P = 16 and the 14-worker point are not in this experiment (they stay in `params.sh`); the P = 16 figure in the prediction below is a calculation, not a measurement here.
 
 **Prediction.**
 
