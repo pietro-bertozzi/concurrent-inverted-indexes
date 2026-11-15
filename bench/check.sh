@@ -139,7 +139,7 @@ check_variant() {
 check_fit() {
     local id mode need docs max=0
     local -a modes
-    for id in "${VARIANTS[@]}"; do
+    for id in "${DISCOVERED[@]}"; do
         IFS=, read -ra modes <<<"${DIM[$id|modes]}"
         for mode in "${modes[@]}"; do
             [[ "$mode" == mixed-* ]] || continue
@@ -178,7 +178,7 @@ main() {
     WORK="$(mktemp -d)"
     trap cleanup EXIT
     join_tabs variant result detail
-    for id in "${VARIANTS[@]}"; do
+    for id in "${DISCOVERED[@]}"; do
         log "checking $id"
         if row="$(check_variant "$id")"; then passed=$(( passed + 1 )); else failed=$(( failed + 1 )); fi
         echo "$row"

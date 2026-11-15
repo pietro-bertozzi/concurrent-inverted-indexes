@@ -28,7 +28,7 @@ RUNNER_KEYS=(uses modes max_threads)
 # Numeric parameters a variant can ask for in `uses` (CLI: --partitions, --batch, --queue).
 USABLE_PARAMS=(partitions batch queue)
 
-VARIANTS=()                 # discovered variants, as "language/variant"
+DISCOVERED=()               # discovered variants, as "language/variant"
 SKIPPED=()                  # variants skipped at discovery, as "language/variant|reason"
 declare -A DIM=()           # DIM["language/variant|key"]=value, from dimensions.tsv
 DIM_KEYS=()                 # union of all dimension keys (runner keys excluded), sorted
@@ -68,7 +68,7 @@ mode_kind() {
     esac
 }
 
-# Fills VARIANTS with every impl/<language>/<variant>/ folder; folders starting with _
+# Fills DISCOVERED with every impl/<language>/<variant>/ folder; folders starting with _
 # are shared code. A variant missing build.sh, run.sh or dimensions.tsv is skipped with a
 # warning (recorded in failures.tsv later, like a failed build). Warns if a language has no
 # usable `sequential` variant.
@@ -91,17 +91,17 @@ discover_variants() {
                 SKIPPED+=("$lang/$variant|$reason")
                 continue
             fi
-            VARIANTS+=("$lang/$variant")
+            DISCOVERED+=("$lang/$variant")
         done
     done
     for lang_dir in "$ROOT"/impl/*/; do
         lang="$(basename "$lang_dir")"
         [[ "$lang" != _* ]] || continue
-        in_list "$lang/sequential" "${VARIANTS[@]}" \
+        in_list "$lang/sequential" "${DISCOVERED[@]}" \
             || warn "language '$lang' has no usable 'sequential' variant (the baseline of every speedup)"
     done
-    [[ ${#VARIANTS[@]} -gt 0 ]] || die "no usable variants found under $ROOT/impl/<language>/<variant>/"
-    log "discovered ${#VARIANTS[@]} variants: ${VARIANTS[*]}"
+    [[ ${#DISCOVERED[@]} -gt 0 ]] || die "no usable variants found under $ROOT/impl/<language>/<variant>/"
+    log "discovered ${#DISCOVERED[@]} variants: ${DISCOVERED[*]}"
 }
 
 # Reads every dimensions.tsv into DIM and builds DIM_KEYS, the sorted union of the
@@ -111,7 +111,7 @@ discover_variants() {
 read_dimensions() {
     local id key value line_no
     local -a all_keys=() reserved=("${HEAD_COLS[@]}" "${PARAM_COLS[@]}" "${TAIL_COLS[@]}" "${MEASURE_COLS[@]}" "${LAST_COLS[@]}")
-    for id in "${VARIANTS[@]}"; do
+    for id in "${DISCOVERED[@]}"; do
         line_no=0
         while IFS=$'\t' read -r key value || [[ -n "$key" ]]; do
             line_no=$(( line_no + 1 ))

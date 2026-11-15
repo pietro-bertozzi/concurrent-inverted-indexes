@@ -28,6 +28,11 @@ CORPORA_MB="128 256 512 1024 2048"
 # measurements: 203,212 documents, enough for PRELOAD_DOCS plus the largest insert budget.
 QUERY_CORPUS_MB=512
 
+# Optional: run only some of the discovered variants. A space-separated list of
+# <language>/<variant> glob patterns, e.g. VARIANTS="*/sequential */partition-lock".
+# Unset or empty = all (docs/design.md, Numeric parameters). Left unset here.
+#VARIANTS=""
+
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 16 64"
 BATCH="1 64 1024"

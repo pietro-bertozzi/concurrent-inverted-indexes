@@ -138,6 +138,7 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | `CHECK_REPEAT`, `CHECK_WARMUP`, `CHECK_PARTITIONS`, `CHECK_BATCH`, `CHECK_QUEUE` | run shape and numeric parameters `check.sh` passes to variants (read only by `check.sh`) | 1, 0; 4, 2, 8 |
 | `CHECK_OPS`, `CHECK_PRELOAD` | `--ops` and `--preload` that `check.sh` passes in query and mixed modes; preload + inserts of the largest insert share must fit in the documents of `data/tiny/` | 7, 1 |
 | `REPEAT`, `WARMUP` | repetitions per run | 10, 1 |
+| `VARIANTS` (optional) | which discovered variants to run: a list of `<language>/<variant>` glob patterns; empty or unset = all | `*/sequential */partition-lock` |
 | `TIMEOUT` | limit per run, as a number with an optional `s`, `m`, `h` or `d` suffix | 30m to start |
 
 **`CHECK_OPS=7`, `CHECK_PRELOAD=1` (all params files).** `data/tiny/` has 6 documents and 7 queries, and three wishes cannot all hold: preload + floor(`CHECK_OPS` × 80 / 100) ≤ 6, `CHECK_OPS` > 7, and a preload above 0. With `CHECK_OPS` ≥ 8 the largest share already inserts 6 documents, which forces a preload of 0. *Why 7 and 1: wrap-around of the query file is still exercised, because every worker starts at a random offset and cycles past the end; a preload of 1 keeps the preload path tested (1 + floor(7 × 80 / 100) = 1 + 5 = 6 documents, exactly the corpus).*
@@ -147,6 +148,8 @@ With `CHECK_OPS=7`, mixed-95-5 does floor(7 × 5 / 100) = 0 inserts, so inserts 
 The file is plain bash, read with `source`. *Why: no parsing and no dependency; every implementation gets exactly the same values from one place.* Language is not a parameter: the folder says it.
 
 There are several params files with the same variable names: `params.sh` (the main, unpinned experiment), `params-pinned.sh` (the pinned control experiment, see Pinning), `params-quick.sh` (development) and one per question of `docs/experiment-plan.md`, so far `params-q1.sh` (section Run conditions). The runner validates the file before doing anything: every variable defined, numbers and lists well-formed, `CORPUS_BASE_MB` and `QUERY_CORPUS_MB` listed in `CORPORA_MB`, and, if weak scaling of build is requested, every size base × N listed too.
+
+**`VARIANTS` (optional, unset in `params.sh`, `params-pinned.sh`, `params-quick.sh` and `params-q1.sh`).** A space-separated list of glob patterns matched against `<language>/<variant>` (`*/sequential`, `java/*`, `c/partition-lock`). Discovery is unchanged (every folder under `impl/` is found, its `dimensions.tsv` is read, the result header is the same for every experiment); `VARIANTS` only selects among the discovered variants, which are then built and run. A pattern that has no `/` or matches no discovered variant stops the runner (a typo must not silently shrink a sweep); leaving out a language's `sequential` is allowed but warned about, since the speedups of that language would lack their baseline. `meta.txt` lists the selected variants, and the params file itself is copied into it. `check.sh` ignores `VARIANTS` and always checks every variant. *Why: a question's sweep (one params file) should not spend its hour on variants it does not need.* Note for `params-q1.sh`: it measured 292 runs before `private-merge` existed; with `VARIANTS` unset it now also runs `private-merge` (build mode) and gives 324.
 
 ## Workload model
 

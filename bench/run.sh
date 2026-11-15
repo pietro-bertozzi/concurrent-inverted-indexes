@@ -20,6 +20,7 @@ REQUIRED_PARAMS=(EXPERIMENT MODES SCALING THREADS THREADS_WEAK CORPUS_BASE_MB CO
                  OPS_PER_WORKER PRELOAD_DOCS SEED REPEAT WARMUP TIMEOUT COOLDOWN
                  SHUFFLE_SEED)
 
+SELECTED=()                 # discovered variants the params file selects (VARIANTS), as "language/variant"
 BUILT=()                    # variants whose build succeeded
 declare -A BUILD_SETTINGS=()  # compiler/JVM version and flags, per variant
 RESULT=""                   # results/<experiment>/<timestamp>
@@ -208,7 +209,7 @@ write_meta() {
         echo "timeout: $(timeout --version | head -n1)"
         echo "params_file: $PARAMS_FILE"
         echo "shuffle_seed: $SHUFFLE_SEED"
-        echo "variants: ${VARIANTS[*]}"
+        echo "variants: ${SELECTED[*]}"
         echo
         echo "preflight before the sweep:"
         preflight_state
@@ -247,7 +248,7 @@ finish_meta() {
 # build_settings column ("-" if absent; a file left by an earlier build is removed first).
 build_all() {
     local id settings_file status
-    for id in "${VARIANTS[@]}"; do
+    for id in "${SELECTED[@]}"; do
         log "building $id"
         settings_file="$ROOT/impl/$id/build/settings.txt"
         rm -f "$settings_file"
@@ -506,6 +507,43 @@ run_all() {
     done < "$RESULT/runlist.tsv"
 }
 
+# Fills SELECTED with the discovered variants that match VARIANTS: an optional list of
+# <language>/<variant> glob patterns (e.g. "*/sequential java/partition-lock"). Empty or
+# unset selects all. Discovery is unchanged; this only chooses among its result. A pattern that
+# matches no discovered variant is an error (a typo must not silently shrink the sweep).
+select_variants() {
+    local -a patterns=()
+    local pattern id lang lang_dir matched
+    read -ra patterns <<<"${VARIANTS-}"    # read does not expand globs
+    if (( ${#patterns[@]} == 0 )); then
+        SELECTED=("${DISCOVERED[@]}")
+        return
+    fi
+    for pattern in "${patterns[@]}"; do
+        [[ "$pattern" == */* ]] || die "VARIANTS pattern '$pattern' must have the form <language>/<variant> (globs allowed, e.g. */sequential)"
+        matched=0
+        for id in "${DISCOVERED[@]}"; do
+            # shellcheck disable=SC2053  # the unquoted right side is the glob pattern
+            if [[ "$id" == $pattern ]]; then matched=1; fi
+        done
+        (( matched )) || die "VARIANTS pattern '$pattern' matches no discovered variant (discovered: ${DISCOVERED[*]})"
+    done
+    for id in "${DISCOVERED[@]}"; do
+        for pattern in "${patterns[@]}"; do
+            # shellcheck disable=SC2053
+            if [[ "$id" == $pattern ]]; then SELECTED+=("$id"); break; fi
+        done
+    done
+    for lang_dir in "$ROOT"/impl/*/; do
+        lang="$(basename "$lang_dir")"
+        [[ "$lang" != _* ]] || continue
+        if in_list "$lang/sequential" "${DISCOVERED[@]}" && ! in_list "$lang/sequential" "${SELECTED[@]}"; then
+            warn "VARIANTS leaves out $lang/sequential: speedups of $lang need another baseline"
+        fi
+    done
+    log "VARIANTS selects ${#SELECTED[@]} of ${#DISCOVERED[@]} variants: ${SELECTED[*]}"
+}
+
 # Discovery, dimensions, build, run list, shuffle, runs.
 main() {
     load_params "$@"
@@ -515,6 +553,7 @@ main() {
     CPU_CORES="$(physical_cores)"
     CPU_LOGICAL="$(nproc --all)"
     discover_variants
+    select_variants
     read_dimensions
     make_result_dir
     record_skipped
