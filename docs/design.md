@@ -6,7 +6,7 @@ Nov 14, 2026 · Pietro Bertozzi
 
 The project compares inverted index implementations across four languages and several concurrency strategies, and measures performance only. It is the individual project for the Concurrent and Parallel Systems course (pass/fail), built to the standard of a portfolio project.
 
-This document fixes the shared benchmark design: repository layout, workload, data, CLI contract, results format, analysis plan and methodology. Each decision carries a short reason. The design of the individual variants (which partitioning and locking combinations to build) comes later, starting from the design space map in *Inverted index — mappa di progetto*.
+This document fixes the shared benchmark design: repository layout, workload, data, CLI contract, results format, analysis plan and methodology. Each decision carries a short reason. The questions the benchmark answers and the concurrent variants built to answer them are in `docs/experiment-plan.md`, which is part of the source of truth together with this document.
 
 ```
   data/                    ─┐
@@ -637,7 +637,7 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 
 The shared design is complete; what remains are the variant designs and numbers that need the first measurements.
 
-- [ ] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers.
+- [x] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers. Done in `docs/experiment-plan.md` (section The implementations); built in three rounds (section Order of work there).
 - [ ] Visibility check for mixed modes (what a query may observe). Includes how a concurrent variant keeps posting lists sorted while they are queried, since `AND` and `OR` merge sorted lists.
 - [x] Preprocessing: markup stripping is settled by using a pre-extracted plain-text source (section Corpus); `corpus/extract.sh` (documents), `corpus/normalize.sh` (tokenization), `corpus/make-prefixes.sh` (prefixes) and `corpus/make-queries.sh` (queries) are implemented.
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).

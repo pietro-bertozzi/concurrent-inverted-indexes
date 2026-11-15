@@ -4,29 +4,24 @@ University project (Concurrent and Parallel Systems): inverted index implementat
 Java, Go, C++ and C, each with several concurrency strategies, benchmarked against each other.
 Performance only. Built to portfolio standard: clean, explainable, reproducible.
 
-**`docs/design.md` is the source of truth.** Read it before any non-trivial change.
-If something in it looks wrong or incomplete, say so and ask. Never silently deviate.
+**`docs/design.md` and `docs/experiment-plan.md` are the source of truth.** `design.md` fixes
+the shared infrastructure and rules; `experiment-plan.md` fixes the questions and the
+concurrent variants. Read both before any non-trivial change. If something in them looks
+wrong or incomplete, say so and ask. Never silently deviate.
 
-## Current phase: sequential baselines
+## Current phase: Round 1: global-lock and partition-lock
 
-Infrastructure is done: skeleton, `bench/params.sh` / `params-pinned.sh` / `params-quick.sh`,
-`bench/run.sh`, `bench/check.sh`, `bench/common.sh`, test data in `data/tiny/`, preprocessing
-in `corpus/`. Now the four `sequential` variants, following `docs/design.md`, section
-Shared implementation rules (splitmix64, exact operation counts, query algorithms,
-build/runtime settings, data structures).
+The infrastructure and the four `sequential` baselines are done and swept
+(`results/full/`). Now round 1 of `docs/experiment-plan.md` (section The implementations:
+Rules every variant follows, How each variant works, Order of work):
 
-1. Infrastructure updates from the new design: the mixed-sizing check in `run.sh` uses
-   exactly `preload + floor(ops × insert share / 100)`; `check.sh` checks mixed modes against
-   a build-mode reference dump of the corpus prefix; `CHECK_OPS` and `CHECK_PRELOAD` in all
-   three params files
-2. `impl/java/_common/` and `impl/java/sequential/`: all five modes, latencies, dump,
-   measurement columns; first end-to-end test of the runner and `check.sh`
-3. `impl/go/_common/` and `impl/go/sequential/`, with Java as the reference
-4. `impl/cpp/_common/` and `impl/cpp/sequential/`
-5. `impl/c/_common/` (with a hand-written hash map: its design is not decided yet, ask)
-   and `impl/c/sequential/`
-
-`bench/check.sh` must pass for every variant before its step is committed.
+- `global-lock` (`uses` batch) and `partition-lock` (`uses` partitions, batch), all five
+  modes, in the order Java, Go, C++, C.
+- Code shared by variants (partition hash, sorted insertion, the worker loop with the
+  dynamic counter) goes in each language's `_common/`.
+- `bench/check.sh` must pass for each new variant at every worker count before its
+  language is committed. One commit and push per language.
+- Rounds 2 and 3 (`private-merge`, `partition-writers`, extras) come later.
 
 ## Rules that must not be broken without asking
 
