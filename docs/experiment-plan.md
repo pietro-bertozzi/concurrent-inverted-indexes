@@ -344,7 +344,7 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 
 **Why it matters.** It is the classic trade-off of parallel computing: share and synchronize, or replicate and combine. Many real indexers (MapReduce, Lucene segments) choose the second.
 
-**Experiment.** `private-merge` against the best `partition-lock` from Q1. Build mode, strong and weak scaling. Read `build_ns`, `finalize_ns` (the merge), `peak_rss_bytes`.
+**Experiment.** `private-merge` against the best `partition-lock` from Q1 (P = 64, batch 64) and `sequential`. Build mode, strong scaling on the 128 MB corpus and weak scaling from a 128 MB base (1, 2, 4, 8 workers), workers `1 2 4 6 8 12 16 22` for strong, 1 warm-up + 5 repetitions. Read `build_ns`, `finalize_ns` (the merge), `peak_rss_bytes`. The parameter file is `bench/params-q2.sh` (272 runs). **Not run yet, and not accepted as it is:** the runner runs strong scaling on every size listed for weak scaling, which gives an estimate of 127 minutes against the 70-minute limit; with strong scaling on 128 MB only it would be 104 runs and about 34 minutes (see design.md, Experiment Q2).
 
 **Prediction.**
 

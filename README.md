@@ -11,7 +11,7 @@ The full design (workload, data, CLI contract, results format, methodology) is i
 
 ```
 bench/       runner (run.sh), correctness check (check.sh), shared code (common.sh) and
-             parameter files (params.sh, params-pinned.sh, params-quick.sh, params-q1.sh)
+             parameter files (params.sh, params-pinned.sh, params-quick.sh, params-q1.sh, params-q2.sh)
 corpus/      preprocessing scripts: raw Wikipedia -> corpus, queries
 data/        generated corpus prefixes and query files (not committed); raw dumps in data/raw/
 impl/        impl/<language>/<variant>/ with build.sh, run.sh, dimensions.tsv
@@ -43,6 +43,7 @@ Run the benchmark:
 ./bench/run.sh bench/params-pinned.sh   control experiment pinned to the P-cores
 ./bench/run.sh bench/params-quick.sh    small sweep for development
 ./bench/run.sh bench/params-q1.sh       experiment Q1 (build, 128 MB, locks and batching), meant to take about one hour (66 minutes estimated)
+./bench/run.sh bench/params-q2.sh       experiment Q2 (sharing or replicating, strong and weak scaling): estimated at 127 minutes, over the limit, not to be run until the open point in design.md is decided
 ```
 
 Check that every variant builds the right index (dump of the test data in `data/tiny/`
