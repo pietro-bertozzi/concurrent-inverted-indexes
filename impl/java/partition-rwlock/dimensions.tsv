@@ -1,0 +1,8 @@
+partitioning	by-term
+writer	direct
+coordination	rwlock
+granularity	partition
+write_timing	immediate
+visibility	partial
+uses	partitions,batch
+modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
