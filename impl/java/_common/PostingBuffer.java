@@ -7,17 +7,26 @@ import java.util.Arrays;
  * {@code batch} postings and at the end of every phase.
  */
 final class PostingBuffer {
-    String[] terms = new String[64];
-    int[] docs = new int[64];
-    int[] freqs = new int[64];
+    String[] terms;
+    int[] docs;
+    int[] freqs;
     int size = 0;
+
+    PostingBuffer() { this(64); }
+
+    /** A buffer with room for {@code capacity} postings before it has to grow. */
+    PostingBuffer(int capacity) {
+        terms = new String[capacity];
+        docs = new int[capacity];
+        freqs = new int[capacity];
+    }
 
     /** Appends one posting (term, document, frequency). */
     void add(String term, int docId, int freq) {
         if (size == terms.length) {
-            terms = Arrays.copyOf(terms, size * 2);
-            docs = Arrays.copyOf(docs, size * 2);
-            freqs = Arrays.copyOf(freqs, size * 2);
+            terms = Arrays.copyOf(terms, size * 2 + 1);
+            docs = Arrays.copyOf(docs, size * 2 + 1);
+            freqs = Arrays.copyOf(freqs, size * 2 + 1);
         }
         terms[size] = term;
         docs[size] = docId;
