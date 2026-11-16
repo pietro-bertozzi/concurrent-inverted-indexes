@@ -11,7 +11,8 @@ The full design (workload, data, CLI contract, results format, methodology) is i
 
 ```
 bench/       runner (run.sh), correctness check (check.sh), shared code (common.sh) and
-             parameter files (params.sh, params-pinned.sh, params-quick.sh, params-q1.sh, params-q2.sh)
+             parameter files (params.sh, params-pinned.sh, params-quick.sh, params-q1.sh to params-q5.sh;
+             Q4 has two: params-q4a.sh and params-q4b.sh)
 corpus/      preprocessing scripts: raw Wikipedia -> corpus, queries
 data/        generated corpus prefixes and query files (not committed); raw dumps in data/raw/
 impl/        impl/<language>/<variant>/ with build.sh, run.sh, dimensions.tsv
@@ -44,6 +45,10 @@ Run the benchmark:
 ./bench/run.sh bench/params-quick.sh    small sweep for development
 ./bench/run.sh bench/params-q1.sh       experiment Q1 (build, 128 MB, locks and batching), meant to take about one hour (66 minutes estimated)
 ./bench/run.sh bench/params-q2.sh       experiment Q2 (sharing or replicating, strong and weak scaling): estimated at 127 minutes, over the limit, not to be run until the open point in design.md is decided
+./bench/run.sh bench/params-q3.sh       experiment Q3 (locks or messages, build, 128 MB): 292 runs, 63 minutes estimated
+./bench/run.sh bench/params-q4a.sh      experiment Q4, pinned control (P-cores only, up to 12 workers): 58 runs, 10 minutes
+./bench/run.sh bench/params-q4b.sh      experiment Q4, static against dynamic handout, unpinned: 44 runs, 7 minutes
+./bench/run.sh bench/params-q5.sh       experiment Q5 (read/write lock, query and mixed modes, Java and C, 512 MB): 136 runs, 64 minutes estimated
 ```
 
 Check that every variant builds the right index (dump of the test data in `data/tiny/`
@@ -78,7 +83,7 @@ expected canonical dump) is in `data/tiny/`.
 ## Status
 
 Infrastructure is done (skeleton, parameters, runner, correctness check, test data,
-preprocessing). The four `sequential` baselines (`impl/java`, `impl/go`, `impl/cpp`, `impl/c`) are done. Current phase: round 1 of `docs/experiment-plan.md`, the `global-lock` and `partition-lock` variants, Java first, then Go, C++ and C (done in all four languages). Round 2 has begun: `private-merge` (all four languages; done) and `partition-writers` (all four languages; done), then the extras `private-merge-static` (C; done) and `partition-rwlock` (Java and C; done). All variants pass `bench/check.sh`. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
+preprocessing). The four `sequential` baselines (`impl/java`, `impl/go`, `impl/cpp`, `impl/c`) are done. Current phase: round 1 of `docs/experiment-plan.md`, the `global-lock` and `partition-lock` variants, Java first, then Go, C++ and C (done in all four languages). Round 2 has begun: `private-merge` (all four languages; done) and `partition-writers` (all four languages; done), then the extras `private-merge-static` (C; done) and `partition-rwlock` (Java and C; done): every variant of the plan is implemented, and the parameter files of Q3, Q4 and Q5 exist (Q2's is waiting for a decision, see `docs/design.md`). All variants pass `bench/check.sh`. Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
 compiles the sources from a copy in `build/src/`), C++ needs `g++`, C needs `gcc` (its hash map is our own, see `docs/design.md`). The corpus
 sizes (128 to 2048 MB) and the `OPS_*`, `PRELOAD_DOCS` and `QUERY_CORPUS_MB` values of the
 params files come from the sizing measurements (`docs/design.md`, section Sizing measurements).

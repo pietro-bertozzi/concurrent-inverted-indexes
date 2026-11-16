@@ -10,7 +10,7 @@ It complements `docs/design.md`, which fixes the shared infrastructure (workload
 
 **Time limit.** Every experiment (one params file per question) must take about one hour, builds included, and at most 70 minutes estimated (docs/design.md, Run conditions). The experiments below are therefore small, targeted sweeps, not one big sweep; `bench/params-q1.sh` is the first.
 
-Status, 2026-11-15: round 1 (`global-lock`, `partition-lock`) is implemented in all four languages and measured (Q1 results below); `private-merge` (round 2) is implemented, its experiment Q2 not yet run. The other variants of the plan are not implemented. The plan keeps evolving: the repo copy, `docs/experiment-plan.md`, is merged with the exported one after each round.
+Status, 2026-11-16: every variant of the plan is implemented and passes `bench/check.sh`: `global-lock`, `partition-lock`, `private-merge` and `partition-writers` in all four languages, `private-merge-static` in C, `partition-rwlock` in Java and C. Q1 is measured (results below); Q2 has not been run (its params file is over the time limit, see Q2); the parameter files of Q3, Q4 (two files) and Q5 exist and are estimated at 63, 10 + 7 and 64 minutes (docs/design.md, Run conditions). The plan keeps evolving: the repo copy, `docs/experiment-plan.md`, is merged with the exported one after each round.
 
 ## The problem space
 
@@ -398,11 +398,11 @@ In one sentence: same configuration, locks against messages; the batch sets what
 - **Owner computes.** Instead of protecting shared data with locks, give each partition one owner thread; nobody else touches it. Other workers send it messages. No lock on the index is ever needed.
 - **The queue is shared.** Sending a message goes through a queue, which itself needs a lock or atomic operations. Synchronization is moved, not removed, so batching matters as in Q1.
 - **Copying and backpressure.** A message copies postings, and a full queue blocks the sender. Queue capacity trades memory for fewer stalls.
-- **Each language has its own idiom.** Go is built around channels; Java has `BlockingQueue`; C++ and C have no standard queue, so ours is a mutex and a condition variable.
+- **Each language has its own idiom.** Go is built around channels; Java has `ArrayBlockingQueue`; C++ and C have no standard queue, so ours is a ring buffer (`std::deque` in C++) behind a mutex. All four are used through non-blocking put and take; a sender facing a full queue empties its own queue and retries instead of sleeping (docs/design.md, section `partition-writers`).
 
 **Why it matters.** It is the shared-memory versus message-passing debate of the course, measured on the same problem in the same languages.
 
-**Experiment.** `partition-writers` against `partition-lock`, same P and `BATCH`, plus `QUEUE` capacity. Build mode, where writing dominates (the variant has no mixed modes: its owners write without locks).
+**Experiment.** `partition-writers` against `partition-lock`, same P and `BATCH`, plus `QUEUE` capacity. Build mode, where writing dominates (the variant has no mixed modes: its owners write without locks). The parameter file is `bench/params-q3.sh`: `sequential`, `partition-lock` and `partition-writers`, P = 64, `BATCH` 1, 64, 1024, `QUEUE` 4 and 64, strong scaling on the 128 MB corpus, workers `1 2 4 6 8 12 16 22`, 1 warm-up + 5 repetitions (292 runs, estimated at 63 minutes: see design.md, Experiment Q3). Waiting is a polling loop with yields, so blocked senders show up as CPU time rather than voluntary context switches (design.md, section `partition-writers`); the cross-check of the plan reads CPU utilization and the throughput, not only `ctx_vol`.
 
 **Prediction.**
 
@@ -459,7 +459,7 @@ In one sentence: three tools, each removing one suspect: pinning removes the E-c
 
 **Why it matters.** Textbook speedup assumes identical cores. Every laptop and phone CPU today is hybrid, and most parallel code still splits work statically.
 
-**Experiment.** The strong-scaling curves of every variant, unpinned and in the P-cores-only control. Plus `private-merge-static` (static split) against `private-merge` (dynamic), build mode, in one language.
+**Experiment.** The strong-scaling curves of every variant, unpinned and in the P-cores-only control. Plus `private-merge-static` (static split) against `private-merge` (dynamic), build mode, in one language. Two parameter files, because a params file has one `PINNING`: `bench/params-q4a.sh`, the pinned control (`taskset` to CPUs 0-11, workers `1 2 4 6 8 12`) for `sequential`, `partition-lock` (P = 64, batch 64), `private-merge` and `private-merge-static` (58 runs, about 10 minutes); and `bench/params-q4b.sh`, unpinned, workers `1 2 4 6 8 12 16 22`: `private-merge-static` in C against `private-merge` in all four languages, with `sequential` (40 + 4 runs, about 7 minutes). The unpinned `partition-lock` curve is the one of Q1. `private-merge` and `sequential` are in `q4b` so that the static-against-dynamic comparison does not wait for Q2 (not run yet); the numbers are the same kind of runs as Q2's strong scaling on 128 MB.
 
 **Prediction.**
 
@@ -517,7 +517,7 @@ In one sentence: same configuration, plain lock against read/write lock; the rea
 
 **Why it matters.** Real indexes are read-heavy. Whether readers can share is the first question a production design asks.
 
-**Experiment.** `partition-rwlock` against `partition-lock`. Query mode and the three mixed modes, strong scaling, in Java and C. Read throughput and p50 / p99 query latency.
+**Experiment.** `partition-rwlock` against `partition-lock`. Query mode and the three mixed modes, strong scaling, in Java and C. Read throughput and p50 / p99 query latency. The parameter file is `bench/params-q5.sh`: `sequential`, `partition-lock` and `partition-rwlock` in Java and C, P = 64, batch 64, on the 512 MB query corpus, workers `1 2 4 6 8 12 16 22`, 1 warm-up + 5 repetitions, 136 runs. **`OPS_TOTAL` is 40,000 instead of 100,000** to fit the time limit (estimate 64 minutes, against 95 with 100,000): every repetition rebuilds the 512 MB index (load and build are 40-70% of a repetition), so the cut only shortens the timed phase. What the question loses: p99 and throughput come from 40,000 operations (38,000 queries in mixed-95-5, 8,000 in mixed-20-80), and at 22 workers the timed phase of a read/write-locked query run is only about 0.4 s (C) to 0.7 s (Java); the 5 repetitions give the spread.
 
 **Prediction.**
 
@@ -551,7 +551,7 @@ Four core variants in all four languages (16 implementations) answer Q1–Q4 and
 | `private-merge` | by document | direct, private | none while building; parallel merge at the end | — | build, query | all four | Q2, Q4 |
 | `partition-writers` | by term | owner per partition (the workers themselves) | bounded queues | `partitions`, `batch`, `queue` | build, query | all four | Q3, Q4 |
 | `private-merge-static` (extra) | by document | direct, private | none; static split of documents | — | build | C only | Q4 |
-| `partition-rwlock` (extra) | by term | direct | read/write lock per partition | `partitions`, `batch` | query, mixed | Java, C | Q5 |
+| `partition-rwlock` (extra) | by term | direct | read/write lock per partition | `partitions`, `batch` | query, mixed (`build` is declared too, because `bench/check.sh` builds its mixed-mode reference from it; Q5 does not run it) | Java, C | Q5 |
 
 ### Rules every variant follows
 
