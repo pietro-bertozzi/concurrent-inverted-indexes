@@ -418,6 +418,16 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **C.** `partition_rwlock_index.c`: `pthread_rwlock_t` per partition with default attributes, `pthread_rwlock_wrlock` in the flush, `pthread_rwlock_rdlock` in `query`. **Cross-check:** `check.sh` passes at every worker count of `params.sh` (45 runs); ThreadSanitizer and AddressSanitizer + UBSan report nothing in query, mixed-50-50 and mixed-95-5 (4 MB corpus, 8 workers, `--partitions 16 --batch 4`).
 
+### Concurrent variants (extra: `private-merge-heap`)
+
+**`private-merge-heap` (Java, Go, C++, C, in this order, one commit per language; build and query modes).** `private-merge` with one difference, the algorithm of the per-term N-way merge (plan: Q2 follow-up). `private-merge` repeats, for every posting of the output, a linear scan of the heads of the k lists of the term (k ≤ N, the workers that saw the term): k comparisons per posting. `private-merge-heap` keeps the heads of the lists that are not exhausted in a **binary min-heap** keyed by the head document ID: each posting takes the root, replaces it by the next head of the same list (or, if the list is exhausted, by the last entry of the heap) and sifts it down, which costs O(log k) comparisons. The heap is built once per term in O(k). Everything else is identical and shares the code: the private build, the piles, the grouping of lists by term, and the rule that **a term with one list (k = 1) keeps that list as it is** (no merge, no copy). The output list is allocated once at its final size, as in `private-merge`. Document IDs of different workers are disjoint, so there are no ties between heads and the result is the same list as the linear scan gives, posting for posting.
+
+*Why one variant folder and not a dimension:* the merge algorithm is not a structural dimension of `docs/design.md` (section Dimensions) and `dimensions.tsv` is the same as `private-merge`'s (`by-document`, `direct`, `deferred`, `uses none`, `modes build,query`), so the results header does not change; the two are told apart by the variant name, as `private-merge-static` is.
+
+*Sharing:* in each language the code of `private-merge` is now in `_common/` (as `private-merge-static` did in C) and has a flag that chooses the merge: Java `new PrivateMergeIndex(workers, heap)`, Go `NewPrivateMergeHeapIndex`, C++ `PrivateMergeIndex(workers, heap)`, C `private_merge_heap_index_new`. The existing constructors keep their meaning (linear scan), so the `main` of `private-merge` is unchanged, and the code that `private-merge` runs is the same lines as before: only the choice between two merge functions was added after the grouping of the lists. Each variant folder holds `main`, `build.sh`, `run.sh` and `dimensions.tsv`.
+
+**Java.** `PrivateMergeIndex` moved from `private-merge/` to `_common/`; the heap is two `int[]` (`key`, the head document ID, and `src`, the list it comes from) of length k with `siftDown` written out (the entry being moved is held and the children are moved up, not swapped). **Cross-check:** dumps identical to `sequential` on the 8 MB corpus, build mode, at 1, 2, 5, 8 and 22 workers, for `private-merge` and `private-merge-heap`.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.

@@ -355,6 +355,12 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 
 **What would surprise us.** `partition-lock` beating `private-merge` would mean the merge is more expensive than all the locking it replaces.
 
+**Q2 follow-up (Q2b): does the merge algorithm decide the answer?** `private-merge` merges with a linear scan of the heads, O(k) per posting for a term in k lists. The Q2 calibration shows the merge is not small (0.13-0.31 s against a build of 0.2-0.65 s on 128 MB), and a linear scan is the textbook "slow" choice, so a reader may ask whether Q2's verdict (replicating against sharing) is a verdict on replicating or on this merge. `private-merge-heap` replaces only the merge by a binary heap (O(log k)) and keeps everything else. Experiment: `sequential` and `private-merge-heap`, build mode, strong scaling, 128 MB, workers as in Q1, 1 warm-up + 5 repetitions (`bench/params-q2b.sh`); its `finalize_ns` is compared with that of `private-merge` (Q2 or Q4b, the same runs).
+
+- *If `finalize_ns` barely changes:* the merge is not bound by the comparisons but by memory (reading k private lists, writing the output, allocation), so the algorithm does not decide the answer and Q2's conclusion stands.
+- *If it falls a lot at high N:* the linear scan was the cost, and Q2 must be read as "replicating with a naive merge"; the heap result is then the fair one for the comparison with `partition-lock`.
+- *Prediction:* a small difference up to 6 workers (k is small, and a heap costs more per comparison than a scan: swaps, unpredictable branches), a gain growing with N above 8 for the common terms (k close to N), and little change in total time, because most terms are rare (k = 1, no merge at all) and the build dominates. The heap may even lose at small N.
+
 ### Q3. Locks or messages?
 
 **The strategy in short.** In `partition-lock` every partition has a lock, and anyone may write into it, taking turns. In `partition-writers` every partition has one owner, the only thread that may write into it; the others send it their postings as messages. Q3 asks which way of protecting shared data costs less.
@@ -550,6 +556,7 @@ Four core variants in all four languages (16 implementations) answer Q1–Q4 and
 | `partition-lock` | by term | direct | one lock per partition | `partitions`, `batch` | all five | all four | Q1, Q3, Q4 |
 | `private-merge` | by document | direct, private | none while building; parallel merge at the end | — | build, query | all four | Q2, Q4 |
 | `partition-writers` | by term | owner per partition (the workers themselves) | bounded queues | `partitions`, `batch`, `queue` | build, query | all four | Q3, Q4 |
+| `private-merge-heap` (extra) | by document | direct, private | none while building; parallel merge at the end, with a heap | — | build, query | all four | Q2 follow-up (Q2b) |
 | `private-merge-static` (extra) | by document | direct, private | none; static split of documents | — | build | C only | Q4 |
 | `partition-rwlock` (extra) | by term | direct | read/write lock per partition | `partitions`, `batch` | query, mixed (`build` is declared too, because `bench/check.sh` builds its mixed-mode reference from it; Q5 does not run it) | Java, C | Q5 |
 
@@ -571,6 +578,7 @@ Four core variants in all four languages (16 implementations) answer Q1–Q4 and
 - **`partition-lock`.** The index is P sub-maps. A worker keeps one private buffer per partition and flushes a buffer under that partition's lock when it holds `batch` postings; batches cross documents, so `batch` really sets how often a lock is taken, and everything is flushed at the end. When a worker flushes several buffers at once, it visits partitions starting from (worker number mod P) and wraps around, so workers do not queue up at partition 0 one behind the other. Queries lock the partitions of their terms in fixed order (rules above).
 - **`private-merge`.** Everyone builds their own index, then the indexes are combined. Each worker builds a private index from the documents it takes, with no locks, already divided into N piles by term (the partition hash with P = N). At the end, worker i merges pile i of every worker, so all workers merge at once, each on different terms, with no locks. Each worker's lists are already sorted (it takes increasing IDs), so merging them is an N-way merge in document order. The result is an index partitioned by term, which queries use directly.
 - **`partition-writers`.** Each partition has exactly one owner, the only thread that writes it; everyone else sends it postings as messages. The owners are the workers themselves, so the variant uses exactly N threads like every other: each worker tokenizes documents and also owns 1/N of the partitions. Postings for another worker's partition go into that worker's bounded queue (`queue` capacity, in batches of `batch`); a worker regularly empties its own queue into its partitions. Deadlock rule: before waiting on another worker's full queue, a worker empties its own, so someone always makes progress. Build and query modes only: owners write without locks, so a query could not safely read during writes; in query mode nobody writes any more.
+- **`private-merge-heap`.** `private-merge` with one change, the per-term N-way merge: instead of scanning the heads of the k lists for every posting (k comparisons), it keeps the heads in a binary min-heap keyed by document ID (log k comparisons). A term with one list is still reused as it is. Same build, same piles, same result.
 - **`private-merge-static`.** `private-merge` with documents split into N equal ranges up front. In C only, because C has no garbage collector or JIT adding runtime threads that would blur the scheduling effect.
 - **`partition-rwlock`.** `partition-lock` with a read/write lock per partition: queries share, inserts are exclusive. In Java (`ReentrantReadWriteLock`) and C (`pthread_rwlock_t`), whose locks have different fairness policies.
 
@@ -589,4 +597,4 @@ Three rounds, each ending with `check.sh` passing and a sweep, so real speedup c
 
 1. **Round 1:** `global-lock` and `partition-lock`, Java first, then Go, C++, C. Answers Q1 and the first half of Q4.
 2. **Round 2:** `private-merge` and `partition-writers`, same order. Answers Q2, Q3 and the rest of Q4.
-3. **Round 3 (if time allows):** `private-merge-static` (C) and `partition-rwlock` (Java, C). Answers Q5 and sharpens Q4.
+3. **Round 3 (if time allows):** `private-merge-static` (C), `partition-rwlock` (Java, C) and `private-merge-heap` (all four, Java first). Answers Q5, sharpens Q4 and gives the Q2 follow-up.

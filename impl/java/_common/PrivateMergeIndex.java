@@ -11,15 +11,27 @@ import java.util.Map;
  * lock either. A worker takes increasing document IDs, so each private list is already sorted
  * and the merge of a term is an N-way merge in document order. The result is an index
  * partitioned by term; queries (query mode, after finish) read it with no lock.
+ *
+ * The N-way merge of one term has two versions that differ in nothing else (private-merge and
+ * private-merge-heap): a linear scan of the heads of the k lists for every posting (O(k) per
+ * posting) or a binary min-heap of the heads (O(log k) per posting).
  */
 final class PrivateMergeIndex implements Index {
     private final int n;                        // workers = piles
+    private final boolean heap;                 // merge with a heap instead of a linear scan
     private final List<Handle> handles = new ArrayList<>();
     private final List<HashMap<String, PostingList>> merged = new ArrayList<>();   // merged.get(i): the terms of pile i
     private int docs = 0;                       // set by finish()
     private long postings = 0;
 
-    PrivateMergeIndex(int workers) { this.n = workers; }
+    /** Index with the linear-scan merge (private-merge). */
+    PrivateMergeIndex(int workers) { this(workers, false); }
+
+    /** Index with the merge chosen by {@code heap}: true = binary min-heap (private-merge-heap). */
+    PrivateMergeIndex(int workers, boolean heap) {
+        this.n = workers;
+        this.heap = heap;
+    }
 
     @Override
     public Worker worker(int number) {
@@ -87,7 +99,7 @@ final class PrivateMergeIndex implements Index {
         HashMap<String, PostingList> result = new HashMap<>(parts.size() * 2);
         for (Map.Entry<String, List<PostingList>> e : parts.entrySet()) {
             List<PostingList> lists = e.getValue();
-            result.put(e.getKey(), lists.size() == 1 ? lists.get(0) : merge(lists));   // one list: reuse it
+            result.put(e.getKey(), lists.size() == 1 ? lists.get(0) : heap ? mergeHeap(lists) : merge(lists));   // one list: reuse it
         }
         merged.set(i, result);   // each worker writes its own slot; join() publishes it
     }
@@ -113,6 +125,64 @@ final class PrivateMergeIndex implements Index {
         }
         out.size = total;
         return out;
+    }
+
+    /**
+     * The same merge with a binary min-heap: it holds one entry per list that is not exhausted,
+     * the head document ID (key) and the list it comes from (src), with the smallest key at the
+     * root. Each posting takes the root, then either replaces it by the next head of the same
+     * list or, if the list is exhausted, by the last entry, and sifts it down: O(log k).
+     */
+    private static PostingList mergeHeap(List<PostingList> lists) {
+        int k = lists.size(), total = 0;
+        for (PostingList l : lists) total += l.size;
+        PostingList out = new PostingList();
+        out.docs = new int[total];
+        out.freqs = new int[total];
+        int[] at = new int[k];
+        int[] key = new int[k], src = new int[k];
+        int size = 0;
+        for (int j = 0; j < k; j++) {
+            if (lists.get(j).size > 0) {
+                key[size] = lists.get(j).docs[0];
+                src[size] = j;
+                size++;
+            }
+        }
+        for (int i = size / 2 - 1; i >= 0; i--) siftDown(key, src, size, i);   // build the heap
+        for (int n = 0; n < total; n++) {
+            int j = src[0];
+            PostingList l = lists.get(j);
+            out.docs[n] = key[0];
+            out.freqs[n] = l.freqs[at[j]];
+            at[j]++;
+            if (at[j] < l.size) {
+                key[0] = l.docs[at[j]];   // the next head of the same list
+            } else {
+                size--;                   // list exhausted: the last entry takes the root
+                key[0] = key[size];
+                src[0] = src[size];
+            }
+            siftDown(key, src, size, 0);
+        }
+        out.size = total;
+        return out;
+    }
+
+    /** Moves the entry at position i down until both its children have larger keys. */
+    private static void siftDown(int[] key, int[] src, int size, int i) {
+        int k0 = key[i], s0 = src[i];
+        while (true) {
+            int c = 2 * i + 1;                                  // left child
+            if (c >= size) break;
+            if (c + 1 < size && key[c + 1] < key[c]) c++;       // the smaller child
+            if (key[c] >= k0) break;
+            key[i] = key[c];
+            src[i] = src[c];
+            i = c;
+        }
+        key[i] = k0;
+        src[i] = s0;
     }
 
     @Override
