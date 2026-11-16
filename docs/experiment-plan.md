@@ -10,7 +10,7 @@ It complements `docs/design.md`, which fixes the shared infrastructure (workload
 
 **Time limit.** Every experiment (one params file per question) must take about one hour, builds included, and at most 70 minutes estimated (docs/design.md, Run conditions). The experiments below are therefore small, targeted sweeps, not one big sweep; `bench/params-q1.sh` is the first.
 
-Status, 2026-11-16: every variant of the plan is implemented and passes `bench/check.sh`: `global-lock`, `partition-lock`, `private-merge` and `partition-writers` in all four languages, `private-merge-static` in C, `partition-rwlock` in Java and C. Q1 is measured (results below); Q2 has not been run (its params file is over the time limit, see Q2); the parameter files of Q3, Q4 (two files) and Q5 exist and are estimated at 63, 10 + 7 and 64 minutes (docs/design.md, Run conditions). The plan keeps evolving: the repo copy, `docs/experiment-plan.md`, is merged with the exported one after each round.
+Status, 2026-11-16: every variant of the plan is implemented in its planned languages and passes `bench/check.sh`: `global-lock`, `partition-lock`, `private-merge`, `private-merge-heap` and `partition-writers` in all four languages, `private-merge-static` in C, `partition-rwlock` in Java and C. All the experiments have run (Q1 to Q5 and the Q2 follow-up Q2b) and each question has a Results section below its predictions. The question the first Q2 sweep left open, how `private-merge`'s N-way merge is implemented and whether it decides the answer, is answered by Q2b. Still open: the plots and the report. The repo copy, `docs/experiment-plan.md`, is merged with the exported one after each round.
 
 ## The problem space
 
@@ -344,7 +344,7 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 
 **Why it matters.** It is the classic trade-off of parallel computing: share and synchronize, or replicate and combine. Many real indexers (MapReduce, Lucene segments) choose the second.
 
-**Experiment.** `private-merge` against the best `partition-lock` from Q1 (P = 64, batch 64) and `sequential`. Build mode, strong scaling on the 128 MB corpus and weak scaling from a 128 MB base (1, 2, 4, 8 workers), workers `1 2 4 6 8 12 16 22` for strong, 1 warm-up + 5 repetitions. Read `build_ns`, `finalize_ns` (the merge), `peak_rss_bytes`. The parameter file is `bench/params-q2.sh` (272 runs). **Not run yet, and not accepted as it is:** the runner runs strong scaling on every size listed for weak scaling, which gives an estimate of 127 minutes against the 70-minute limit; with strong scaling on 128 MB only it would be 104 runs and about 34 minutes (see design.md, Experiment Q2).
+**Experiment.** `private-merge` against the best `partition-lock` from Q1 (P = 64, batch 64) and `sequential`. Build mode, strong scaling on the 128 MB corpus and weak scaling from a 128 MB base (1, 2, 4, 8 workers), workers `1 2 4 6 8 12 16 22` for strong, 1 warm-up + 5 repetitions. Read `build_ns`, `finalize_ns` (the merge), `peak_rss_bytes`. The parameter file is `bench/params-q2.sh` (272 runs). The runner runs strong scaling on every size listed for weak scaling, so strong scaling ran on 128, 256, 512 and 1024 MB, not only on 128 MB as first planned (128 MB only would have been 104 runs and about 34 minutes). The estimate was 127 minutes against the 70-minute limit (see design.md, Experiment Q2); the file was run as it is, overnight, in 115 minutes (see the results below).
 
 **Prediction.**
 
@@ -355,11 +355,54 @@ In one sentence: measure the price of sharing (locks) and of replicating (merge 
 
 **What would surprise us.** `partition-lock` beating `private-merge` would mean the merge is more expensive than all the locking it replaces.
 
-**Q2 follow-up (Q2b): does the merge algorithm decide the answer?** `private-merge` merges with a linear scan of the heads, O(k) per posting for a term in k lists. The Q2 calibration shows the merge is not small (0.13-0.31 s against a build of 0.2-0.65 s on 128 MB), and a linear scan is the textbook "slow" choice, so a reader may ask whether Q2's verdict (replicating against sharing) is a verdict on replicating or on this merge. `private-merge-heap` replaces only the merge by a binary heap (O(log k)) and keeps everything else. Experiment: `sequential` and `private-merge-heap`, build mode, strong scaling, 128 MB, workers as in Q1, 1 warm-up + 5 repetitions (`bench/params-q2b.sh`, 36 runs, about 6.5 minutes); its `finalize_ns` is compared with that of `private-merge` (Q2 or Q4b, the same runs).
+#### Q2 results (sweep of 2026-11-16)
+
+The answer to Q2: in this implementation, **sharing wins**. `partition-lock` beats `private-merge` on total time at every worker count from 2 up, in all four languages; this is the outcome the plan named as its surprise. The lock-free build is faster, but the merge gives back more than it saves, because the merge takes about the same time whatever the number of workers.
+
+**Run.** `results/q2/`, 272 runs × (1 + 5), 115 minutes (over the one-hour rule, accepted for the night), no failures, no swap. Strong scaling on 128, 256, 512 and 1024 MB; weak scaling 128 MB × N for N = 1 2 4 8. Speedup = sequential total / variant total (build + finalize). Baselines repeat within about 4% across sweeps, so differences under 5% are noise.
+
+| 128 MB, strong | Java | Go | C++ | C |
+| --- | --- | --- | --- | --- |
+| `partition-lock` best speedup | 4.46 | 3.13 | 5.33 | 4.39 |
+| `private-merge` best speedup | 3.53 | 2.51 | 3.06 | 2.26 |
+| `private-merge` build only (no merge), 22 workers | 4.51 | 3.92 | 6.49 | 7.01 |
+| merge share of total, 16 workers | 27% | 31% | 49% | 66% |
+| merge time, 2 to 22 workers | 0.11–0.13 s | 0.13–0.24 s | 0.26–0.29 s | 0.26–0.32 s |
+| peak memory, 22 workers: `private-merge` / `partition-lock` | 1.05 | 1.70 | 1.84 | 2.02 |
+
+**1. Best build time at every N: contradicted on the total, confirmed on the build alone.** The lock-free build of `private-merge` is faster than `partition-lock` from 2 workers up in Go, C++ and C (up to 1.6× in C; a tie in Java). On build + merge, `partition-lock` is faster at every N ≥ 2 in all four languages (time ratio 0.47–0.90 at 128 MB). At 1024 MB the picture is the same, less sharp (Go ties up to 12 workers).
+
+**2. The merge is 10–25% of the total: contradicted.** At 16 workers it is 27% (Java), 31% (Go), 49% (C++), 66% (C); only Java at 256–1024 MB falls in the range. The key observation: **the merge time is flat in the number of workers** (C: 0.26–0.32 s from 2 to 22 workers). The likely reason: with N workers each term appears in up to N private indexes, so the total merge work grows with N while the number of merging threads also grows with N, and the two cancel; merging is also mostly memory traffic (reading N lists, writing one), which more threads do not speed up. To be checked before the report: how the N-way merge is implemented (a linear scan of the N heads costs N comparisons per posting; a heap would cost about log N).
+
+**3. Memory grows with N: confirmed for C, C++ and Go; unclear for Java.** At 128 MB, from 1 to 22 workers, `private-merge` grows 418 → 686 MB in C (+64%) and 321 → 596 MB in C++ (+86%), while `partition-lock` stays flat; it uses up to 2× the memory of `partition-lock`. In Java both grow, and the JVM heap sizing hides the effect.
+
+**4. Weak scaling: time grows without locks: confirmed; the cause is unclear.** For 8× the work, the lock-free build of `private-merge` takes 1.6–1.8× longer, and `partition-lock` about the same. Memory bandwidth is the natural suspect, but 8 workers already go beyond the 6 P-cores and no bandwidth counter was recorded, so it remains a hypothesis.
+
+**Closing Q1.** `private-merge`'s build without its merge is the lock-free reference Q1 needed. In C and C++ it reaches 6.5–7× at 22 workers and is still rising, while `partition-lock` stops at 4.4–5.3×: there, the gap is contention and the cost of the shared index. In Java and Go `partition-lock` is close to the lock-free build (4.4 against 4.5, 3.1 against 3.9), so their ceiling is mostly the hardware and the runtime, not the locks.
+
+#### Q2 follow-up: does the merge algorithm decide the answer? (Q2b, 2026-11-16)
+
+The answer: **no. Sharing still wins with a better merge, so the Q2 result does not depend on the merge algorithm.**
+
+**Why the follow-up.** `private-merge` merges each term's N lists with a linear scan: for every posting it compares the heads of all k lists (k ≤ N), so frequent terms, which appear in every worker's index, cost N comparisons per posting. With N merging threads the work per thread then stays constant, which would explain the flat merge time. `private-merge-heap` is identical except that it keeps the list heads in a binary min-heap, about log k comparisons per posting.
+
+**Experiment.** The Q2 calibration had shown the merge is not small (0.13-0.31 s against a build of 0.2-0.65 s on 128 MB, where the plan predicted 10-25% of the total), and a linear scan is the textbook slow choice, so a reader may ask whether Q2's verdict (replicating against sharing) is a verdict on replicating or on this merge. `private-merge-heap` replaces only the merge by a binary heap (O(log k)) and keeps everything else. `sequential` and `private-merge-heap`, build mode, strong scaling, 128 MB, workers as in Q1, 1 warm-up + 5 repetitions (`bench/params-q2b.sh`, 36 runs, estimated at 6.5 minutes); its `finalize_ns` is compared with that of `private-merge` (Q2 or Q4b, the same kind of runs).
 
 - *If `finalize_ns` barely changes:* the merge is not bound by the comparisons but by memory (reading k private lists, writing the output, allocation), so the algorithm does not decide the answer and Q2's conclusion stands.
 - *If it falls a lot at high N:* the linear scan was the cost, and Q2 must be read as "replicating with a naive merge"; the heap result is then the fair one for the comparison with `partition-lock`.
 - *Prediction:* a small difference up to 6 workers (k is small, and a heap costs more per comparison than a scan: swaps, unpredictable branches), a gain growing with N above 8 for the common terms (k close to N), and little change in total time, because most terms are rare (k = 1, no merge at all) and the build dominates. The heap may even lose at small N.
+
+**Run.** `results/q2b/20261116-164124/`: 36 runs × (1 + 5), about 7 minutes, no failures; build, 128 MB, strong. Compared with `private-merge` and `partition-lock` (P64 B64) from the night run under the same conditions.
+
+| 22 workers, 128 MB | Java | Go | C++ | C |
+| --- | --- | --- | --- | --- |
+| merge, linear scan | 0.12 s | 0.17 s | 0.29 s | 0.30 s |
+| merge, heap | 0.06 s | 0.14 s | 0.28 s | 0.27 s |
+| change | −50% | −20% | −5% | −10% |
+
+The heap helps Java clearly, Go somewhat, and C and C++ hardly at all; and the merge time stays flat as workers grow. In C at 22 workers, `private-merge-heap` totals about 0.41 s against 0.22 s for `partition-lock`, so the gap remains wide.
+
+**What it shows.** The prediction that a heap would bring `private-merge` close to a tie was wrong, and the reason is informative: the merge's cost was not the comparisons but the **memory traffic**: reading N lists scattered through RAM, writing the merged list, looking each term up in N maps. More threads do not speed that up, because they share the same memory. It is the same suspect as Q1's ceiling for `partition-lock` and Q2's weak scaling: memory, not synchronization, limits this workload at high worker counts (a hypothesis consistent with all three results, not measured directly, since no bandwidth counters were read).
 
 ### Q3. Locks or messages?
 
@@ -419,6 +462,36 @@ In one sentence: same configuration, locks against messages; the batch sets what
 
 **What would surprise us.** Go's channels being slower relative to its mutexes than Java's queues are to its locks.
 
+#### Q3 results (sweep of 2026-11-16)
+
+The answer to Q3: **messages and locks end up almost level.** One message per posting is a disaster; with batches of 64 and a large enough mailbox, messages beat locks by 3–14%, but they hit the same ceiling. Messages move the bottleneck, they do not remove it.
+
+**Run.** `results/q3/`, 292 runs × (1 + 5), 61 minutes, no failures. Build mode, 128 MB, P = 64, batch 1 / 64 / 1024, queue 4 / 64. Ratio = time of `partition-lock` / time of `partition-writers` at the same batch (> 1 = messages faster).
+
+|  | Java | Go | C++ | C |
+| --- | --- | --- | --- | --- |
+| batch 1, 22 workers (queue 4 / 64) | 0.04 / 0.08 | 0.18 / 0.33 | 0.09 / 0.09 | 0.07 / 0.08 |
+| batch 64, queue 64, geometric mean over 2–22 workers | 1.06 | 1.06 | 1.07 | 1.06 |
+| batch 1024, 22 workers (queue 4 / 64) | 0.96 / 0.96 | 0.87 / 0.95 | 0.92 / 0.95 | 0.81 / 0.80 |
+| best `partition-lock` speedup | 4.31 | 3.43 | 5.63 | 4.57 |
+| best `partition-writers` speedup (batch 64, queue 64) | 4.91 | 3.70 | 5.98 | 4.71 |
+
+**1. Batch 1 loses clearly: confirmed.** From 2 workers up messages are 2–25× slower than locks, and slower than `sequential` at every worker count. At 1 worker the two tie, so the loss is the mailbox traffic, not the copying.
+
+**2. Batch 1024 matches or beats locks: confirmed up to 8–12 workers, not at 16–22.** The best messages configuration is batch 64 with a mailbox of 64, not batch 1024; with a mailbox of only 4, batch 64 loses (0.78–1.01). The mailbox matters: at batch 64, the larger one is 6–40% faster.
+
+**3. The hot partition still limits: confirmed as a ceiling.** The best messages speedups are only 3–14% above the best locks and flatten above 8–12 workers the same way. The data has no per-owner load, so "the owner of the hot partition is the bottleneck" is the likely cause, not a measured one.
+
+**4. Go is where messages come closest to locks: confirmed at batch 1, no difference at larger batches.** At batch 1 Go's channels lose least (0.18–0.33 at 22 workers against 0.04–0.09 elsewhere); at batch 64 and 1024 all four languages are within noise of each other.
+
+**How waiting shows up depends on the language.** Under the plan's deadlock rule, a sender facing a full mailbox empties its own and yields instead of sleeping. At batch 1, 22 workers:
+
+- **Go:** waiting is CPU time in user space (utilization 94–132%, only 6% kernel time); the goroutine yields inside the runtime.
+- **C and C++:** CPU time spent mostly in the kernel (80–83%, `sched_yield`), and also millions of voluntary context switches from each mailbox's contended mutex; CPU seconds are 27–42× those of the lock.
+- **Java:** utilization collapses to 17–23%: `ArrayBlockingQueue` puts the threads to sleep.
+
+So CPU utilization together with throughput is the indicator that works in all four languages; voluntary context switches alone do not.
+
 ### Q4. What does a hybrid CPU do to scaling?
 
 **The strategy in short.** The Q1 curves bend: they grow well up to 4–6 workers, then slow down. Q4 asks whose fault each bend is: the software (locks, contention) or the hardware. The 155H does not have identical cores:
@@ -465,7 +538,7 @@ In one sentence: three tools, each removing one suspect: pinning removes the E-c
 
 **Why it matters.** Textbook speedup assumes identical cores. Every laptop and phone CPU today is hybrid, and most parallel code still splits work statically.
 
-**Experiment.** The strong-scaling curves of every variant, unpinned and in the P-cores-only control. Plus `private-merge-static` (static split) against `private-merge` (dynamic), build mode, in one language. Two parameter files, because a params file has one `PINNING`: `bench/params-q4a.sh`, the pinned control (`taskset` to CPUs 0-11, workers `1 2 4 6 8 12`) for `sequential`, `partition-lock` (P = 64, batch 64), `private-merge` and `private-merge-static` (58 runs, about 10 minutes); and `bench/params-q4b.sh`, unpinned, workers `1 2 4 6 8 12 16 22`: `private-merge-static` in C against `private-merge` in all four languages, with `sequential` (40 + 4 runs, about 7 minutes). The unpinned `partition-lock` curve is the one of Q1. `private-merge` and `sequential` are in `q4b` so that the static-against-dynamic comparison does not wait for Q2 (not run yet); the numbers are the same kind of runs as Q2's strong scaling on 128 MB.
+**Experiment.** The strong-scaling curves of every variant, unpinned and in the P-cores-only control. Plus `private-merge-static` (static split) against `private-merge` (dynamic), build mode, in one language. Two parameter files, because a params file has one `PINNING`: `bench/params-q4a.sh`, the pinned control (`taskset` to CPUs 0-11, workers `1 2 4 6 8 12`) for `sequential`, `partition-lock` (P = 64, batch 64), `private-merge` and `private-merge-static` (58 runs, about 10 minutes); and `bench/params-q4b.sh`, unpinned, workers `1 2 4 6 8 12 16 22`: `private-merge-static` in C against `private-merge` in all four languages, with `sequential` (40 + 4 runs, about 7 minutes). The unpinned `partition-lock` curve is the one of Q1. `private-merge` and `sequential` are in `q4b` so that the static-against-dynamic comparison did not have to wait for Q2; the numbers are the same kind of runs as Q2's strong scaling on 128 MB.
 
 **Prediction.**
 
@@ -474,6 +547,26 @@ In one sentence: three tools, each removing one suspect: pinning removes the E-c
 - `private-merge-static` at 22 workers is no faster than `private-merge` at 8–10, because the LP E-core workers finish last. Dynamic handout removes the gap.
 
 **What would surprise us.** No difference between static and dynamic would mean the Linux scheduler moves threads to fast cores well enough on its own.
+
+#### Q4 results (sweep of 2026-11-16)
+
+The answer to Q4: **the bend at 6 workers is the hardware**, the same in every variant and the same pinned or not; above 12 workers the extra cores add little. Splitting work statically costs about 18% of the build on this hybrid CPU, much less than predicted, and the merge hides even that in the total.
+
+**Run.** `results/q4a/` (pinned to the P-cores, CPUs 0–11, up to 12 workers: 58 runs, 9.5 minutes) and `results/q4b/` (unpinned `private-merge-static` with its references: 44 runs, 7 minutes); the unpinned curves of `partition-lock` and `private-merge` come from Q2 (they agree with Q1 and Q4b within 4% at most points). Build mode, 128 MB.
+
+| Gain per step, ideal in brackets | 4→6 (1.50) | 6→8 (1.33) | 8→12 (1.50) | 12→16 (1.33) | 16→22 (1.38) |
+| --- | --- | --- | --- | --- | --- |
+| `partition-lock`, unpinned | 1.26–1.30 | 1.08–1.16 | 1.16–1.20 | 1.07–1.10 | 0.98–1.04 |
+| `partition-lock`, pinned | 1.24–1.29 | 1.08–1.13 | 1.11–1.17 | — | — |
+| `private-merge`, unpinned | 1.19–1.29 | 1.04–1.12 | 1.05–1.21 | 0.95–1.03 | 1.03–1.10 |
+
+**1. Every curve bends at 6; 7–12 workers add 20–30%; more cores add less: confirmed.** From 6 to 12 workers `partition-lock` gains 25–37% (hyperthreading, as predicted); from 12 to 22 only 6–14%. 22 workers are not slower than 16 beyond noise.
+
+**2. Pinned, the bend at 6 stays: confirmed; the bends at 14 and 16: unclear.** Pinned and unpinned runs are the same up to 12 workers (time ratio 0.94–1.09 for `partition-lock`), with the same step gains. So the operating system already places the first 12 threads on the P-cores, and the bend at 6 is hyperthreading, not the E-cores. The pinned runs stop at 12 workers, so there is no pinned point to compare 14, 16 and 22 with.
+
+**3. Static at 22 workers no faster than dynamic at 8–10: contradicted; a smaller static penalty exists.** On the total, static is within 0–10% of dynamic at every worker count, and static at 22 workers is 12% faster than dynamic at 8. The penalty is in the build alone: unpinned, static is 17–19% slower than dynamic from 8 workers up (0–5% below that); pinned, only 4–8%. So equal shares of work do cost something once slower cores are involved, but far less than predicted, and the merge (0.26–0.31 s, the same for both) hides it in the total. The likely reason it is small: the operating system's scheduler (with Intel's Thread Director on this CPU) moves the lagging threads to faster cores, which a static split cannot do for itself.
+
+**Lock-free reference.** `private-merge`'s build keeps rising slowly after 12 workers, while `partition-lock`'s total flattens after 16. Both bend at 6, so that bend is the hardware; the flattening above 16 is the hardware plus, in C and C++, a part that the lock-free build escapes (see Q2, Closing Q1).
 
 ### Q5. Reads against writes: does a read/write lock pay off?
 
@@ -533,6 +626,31 @@ In one sentence: same configuration, plain lock against read/write lock; the rea
 - C and Java differ at 95-5 because their locks have different fairness policies.
 
 **What would surprise us.** The read/write lock losing in query mode would mean its shared counter costs more than the 50 µs queries it lets run in parallel.
+
+#### Q5 results (sweep of 2026-11-16)
+
+The answer to Q5: **the read/write lock pays off far more than predicted, and in every mix.** In query mode it gives 5.9× (Java) and 7.1× (C) the throughput of a plain lock at 22 workers, it still wins with 80% writes, and its tail latency is better everywhere. The plain lock stops scaling at 4–6 workers because readers queue for each other behind long queries.
+
+**Run.** `results/q5/`, 136 runs × (1 + 5), 58 minutes, no failures. Java and C, P = 64, batch 64, 512 MB corpus, 40,000 operations per repetition (cut from 100,000 to fit the hour: the timed phase at 22 workers is 0.4–3.4 s, and in mixed-20-80 the p99 rests on 80 queries per repetition). Throughput = operations / `run_ns`; latencies from the latency files.
+
+| 22 workers, rwlock / plain lock | Java throughput | Java p99 | C throughput | C p99 |
+| --- | --- | --- | --- | --- |
+| query | 5.90× | 0.11 | 7.12× | 0.08 |
+| mixed-95-5 | 4.14× | 0.20 | 3.75× | 0.05 |
+| mixed-50-50 | 1.55× | 0.51 | 1.97× | 0.12 |
+| mixed-20-80 | 1.11× | 0.82 | 1.28× | 0.32 |
+
+Throughput > 1 and p99 < 1 favour the read/write lock. In query mode the plain lock peaks at 1.3–1.5× `sequential` at 4–6 workers and then falls, while the read/write lock keeps rising to 7.3× (Java) and 8.1× (C) at 22 workers.
+
+**1. Clear win in query and mixed-95-5: confirmed; "close to the hardware limit": unclear.** The win starts at 2 workers and grows with them. Mixed-95-5 flattens at 4–5× `sequential` from 8 workers: the 5% inserts, not the hardware, limit it. No hardware reference exists for this workload, so the second half cannot be decided.
+
+**2. Close at 50-50, plain lock wins at 20-80: contradicted.** At 50-50 the read/write lock is ahead from 4 workers (1.25–1.97×); at 20-80 the plain lock never wins beyond noise, and the read/write lock is 8–28% ahead from 4–8 workers up. The prediction underestimated how unequal the two kinds of operation are: a query holds its lock for tens of microseconds (long lists of frequent words), an insert batch only briefly, so letting the readers share matters even when they are few.
+
+**3. Worse p99 under heavy writes: contradicted.** From 4 workers up, the read/write lock's p99 is lower in every mode (at 22 workers: 0.05–0.20 of the plain lock's in 95-5, 0.32–0.82 in 20-80). The one place where typical queries wait longer is Java's median at 22 workers in the mixed modes (1.02–1.15× the plain lock's), while its tail is still shorter.
+
+**4. C and Java differ at 95-5 because of fairness: the difference exists, the cause is unclear.** Throughput is almost the same (99.6k against 93.4k operations/s), but Java's p99 is 2.8–4× C's in the mixed modes and only 1.13× in query mode, where there are no writers. The gap opens exactly when writers are present, which is what different reader/writer precedence would produce; but Java and C also differ in runtime, garbage collection and allocation, and no run isolates the lock policy alone.
+
+The surprise named above (the read/write lock losing in query mode) did not happen: at 1 worker it is 9% slower in Java and level in C, and from 2 workers up it wins.
 
 ### Across all questions: does the language change the answer?
 
