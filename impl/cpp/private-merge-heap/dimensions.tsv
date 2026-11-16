@@ -1,0 +1,5 @@
+partitioning	by-document
+writer	direct
+write_timing	deferred
+uses	none
+modes	build,query

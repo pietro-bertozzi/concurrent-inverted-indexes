@@ -5,6 +5,10 @@
 // with no lock either. A worker takes increasing document IDs, so each private list is already
 // sorted and the merge of a term is an N-way merge in document order. The result is an index
 // partitioned by term; queries (query mode, after finish) read it with no lock.
+//
+// The N-way merge of one term has two versions that differ in nothing else (private-merge and
+// private-merge-heap): a linear scan of the heads of the k lists for every posting (O(k) per
+// posting) or a binary min-heap of the heads (O(log k) per posting).
 #pragma once
 #include <memory>
 #include <string>
@@ -21,7 +25,8 @@
 
 class PrivateMergeIndex : public Index {
 public:
-    explicit PrivateMergeIndex(int workers) : n_(workers) {}
+    // heap = false: linear-scan merge (private-merge); true: binary min-heap merge (private-merge-heap).
+    explicit PrivateMergeIndex(int workers, bool heap = false) : n_(workers), heap_(heap) {}
 
     Worker* worker(int /*number*/) override {
         handles_.push_back(std::make_unique<Handle>(*this));
@@ -112,7 +117,7 @@ private:
             PostingList& first = result.find(std::string(term))->second;
             std::vector<const PostingList*> all{&first};
             for (const PostingList& l : lists) all.push_back(&l);
-            first = mergeLists(all);
+            first = heap_ ? mergeListsHeap(all) : mergeLists(all);
         }
     }
 
@@ -135,7 +140,65 @@ private:
         return out;
     }
 
+    // The same merge with a binary min-heap: it holds one entry per list that is not exhausted, the
+    // head document ID (key) and the list it comes from (src), with the smallest key at the root.
+    // Each posting takes the root, then replaces it by the next head of the same list or, if the
+    // list is exhausted, by the last entry, and sifts it down: O(log k).
+    static PostingList mergeListsHeap(const std::vector<const PostingList*>& lists) {
+        size_t total = 0;
+        for (const PostingList* l : lists) total += l->size();
+        PostingList out;
+        out.docs.reserve(total);
+        out.freqs.reserve(total);
+        std::vector<size_t> at(lists.size(), 0);
+        std::vector<int> key(lists.size());
+        std::vector<size_t> src(lists.size());
+        size_t size = 0;
+        for (size_t j = 0; j < lists.size(); j++) {
+            if (lists[j]->size() > 0) {
+                key[size] = lists[j]->docs[0];
+                src[size] = j;
+                size++;
+            }
+        }
+        for (size_t i = size / 2; i-- > 0;) siftDown(key, src, size, i);   // build the heap
+        for (size_t n = 0; n < total; n++) {
+            size_t j = src[0];
+            const PostingList* l = lists[j];
+            out.docs.push_back(key[0]);
+            out.freqs.push_back(l->freqs[at[j]]);
+            at[j]++;
+            if (at[j] < l->size()) {
+                key[0] = l->docs[at[j]];   // the next head of the same list
+            } else {
+                size--;                    // list exhausted: the last entry takes the root
+                key[0] = key[size];
+                src[0] = src[size];
+            }
+            siftDown(key, src, size, 0);
+        }
+        return out;
+    }
+
+    // Moves the entry at position i down until both its children have larger keys.
+    static void siftDown(std::vector<int>& key, std::vector<size_t>& src, size_t size, size_t i) {
+        int k0 = key[i];
+        size_t s0 = src[i];
+        while (true) {
+            size_t c = 2 * i + 1;                              // left child
+            if (c >= size) break;
+            if (c + 1 < size && key[c + 1] < key[c]) c++;      // the smaller child
+            if (key[c] >= k0) break;
+            key[i] = key[c];
+            src[i] = src[c];
+            i = c;
+        }
+        key[i] = k0;
+        src[i] = s0;
+    }
+
     int n_;                                    // workers = piles
+    bool heap_;                                // merge with a heap instead of a linear scan
     std::vector<std::unique_ptr<Handle>> handles_;
     std::vector<Map> merged_;                  // merged_[i]: the terms of pile i
     int docs_ = 0;

@@ -430,6 +430,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Go.** `privatemerge.go` moved from `private-merge/` to `_common/`; `NewPrivateMergeHeapIndex` sets the `heap` field, and `mergePile` calls `mergeListsHeap` instead of `mergeLists` for terms with more than one list. The heap is two slices (`key []int32`, `src []int`) with `siftDown` as a separate function. The output slices are allocated once with the final capacity, as in `mergeLists`. **Cross-check:** dumps identical to `sequential` (Java's reference dump) on the 8 MB corpus, build mode, at 1, 2, 5, 8 and 22 workers, for both variants.
 
+**C++.** `private_merge_index.hpp` moved from `private-merge/` to `_common/`; the constructor takes a `heap` flag (default false, so `private-merge`'s `main.cpp` is unchanged) and `mergePile` calls `mergeListsHeap` instead of `mergeLists` for the terms with further lists (the first list of a term is moved into the result as before, the merge replaces it). The heap is two `std::vector`s (`key`, `src`) with a static `siftDown`; the output vectors are `reserve`d to the final size. **Cross-check:** dumps identical to `sequential` on the 8 MB corpus at 1, 2, 5, 8 and 22 workers, for both variants.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
