@@ -122,10 +122,51 @@ def save(fig, name):
     print("wrote", name)
 
 
+def wrap_title(fig, t):
+    """Break the title into lines no wider than the panels, so it never widens the figure.
+    The lines are then balanced: the narrowest limit that keeps the same number of lines."""
+    r = fig.canvas.get_renderer()
+    boxes = [ax.get_tightbbox(r) for ax in fig.axes]
+    limit = max(b.x1 for b in boxes) - min(b.x0 for b in boxes)
+    original = t.get_text()
+
+    def width(line):
+        t.set_text(line)
+        return t.get_window_extent(r).width
+
+    def wrap(max_width):
+        lines = []
+        for paragraph in original.split("\n"):
+            current = ""
+            for word in paragraph.split():
+                trial = (current + " " + word).strip()
+                if current and width(trial) > max_width:
+                    lines.append(current)
+                    current = word
+                else:
+                    current = trial
+            lines.append(current)
+        return lines
+
+    lines = wrap(limit)
+    lo, hi = limit / 4, limit
+    for _ in range(12):                       # bisection on the line width
+        mid = (lo + hi) / 2
+        if len(wrap(mid)) <= len(lines):
+            hi = mid
+        else:
+            lo = mid
+    lines = wrap(hi)
+    t.set_text("\n".join(lines))
+    return len(lines)
+
+
 def title(fig, text, sub=None):
     if len(fig.axes) <= 2:
         fig.subplots_adjust(top=0.8)
-    fig.suptitle(text, x=0.01, ha="left", fontsize=12, fontweight="bold", y=1.0)
+    t = fig.suptitle(text, x=0.01, ha="left", fontsize=12, fontweight="bold", y=1.0)
+    if wrap_title(fig, t) > 1:               # room for a two-line title above the panels
+        fig.subplots_adjust(top=0.72 if len(fig.axes) <= 2 else 0.84)
     if sub:
         fig.text(0.01, 0.0, sub, ha="left", va="top", fontsize=7.5, color=INK2)
 
