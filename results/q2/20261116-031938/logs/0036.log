@@ -1,0 +1,2 @@
+go 1.22.2, GOMAXPROCS 22, mode build, 6 worker(s), 1 warm-up + 5 repetitions
+clock reading cost: 30 ns (mean of 1000000 back-to-back readings)

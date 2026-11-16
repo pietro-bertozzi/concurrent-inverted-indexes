@@ -7,12 +7,6 @@ data/*
 # Build outputs: every build.sh writes into impl/<lang>/<variant>/build/
 build/
 
-# Results: final experiments are committed, except the raw latency files (large)
-# and quick/dev runs (experiment folders named quick or dev)
-results/quick/
-results/dev/
-results/*/*/latencies/
-
 # Python
 __pycache__/
 .ipynb_checkpoints/
@@ -26,4 +20,12 @@ __pycache__/
 
 # Claude Code local settings
 .claude/settings.local.json
-results/
+
+# Results (results/<experiment>/<timestamp>/): the final experiments are committed (results.tsv,
+# meta.txt, failures.tsv, runlist.tsv, logs/) without the raw latency files, which are large and go
+# to a GitHub release. Not committed: quick and dev runs, and results/full/ (a dress rehearsal,
+# docs/design.md, section Layout).
+results/quick/
+results/dev/
+results/full/
+results/*/*/latencies/

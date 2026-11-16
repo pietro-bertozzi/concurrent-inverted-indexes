@@ -1,0 +1,8 @@
+c gcc 13.3.0, mode mixed-20-80, 4 worker(s), 1 warm-up + 5 repetitions
+clock reading cost: 12 ns (mean of 1000000 back-to-back readings)
+rep 0: sum of query result sizes = 243904091
+rep 1: sum of query result sizes = 243896113
+rep 2: sum of query result sizes = 243922255
+rep 3: sum of query result sizes = 243928108
+rep 4: sum of query result sizes = 243907445
+rep 5: sum of query result sizes = 243909922

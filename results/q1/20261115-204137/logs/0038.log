@@ -1,0 +1,2 @@
+java 25.0.5.0.3, mode build, 22 worker(s), 1 warm-up + 5 repetitions
+clock reading cost: 13 ns (mean of 1000000 back-to-back readings)

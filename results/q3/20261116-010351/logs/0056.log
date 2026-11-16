@@ -1,0 +1,2 @@
+c gcc 13.3.0, mode build, 4 worker(s), 1 warm-up + 5 repetitions
+clock reading cost: 16 ns (mean of 1000000 back-to-back readings)

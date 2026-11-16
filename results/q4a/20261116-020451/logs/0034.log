@@ -1,0 +1,2 @@
+c++ g++ 13.3.0, mode build, 1 worker(s), 1 warm-up + 5 repetitions
+clock reading cost: 12 ns (mean of 1000000 back-to-back readings)

@@ -537,6 +537,10 @@ results/<experiment>/<timestamp>/
 
 `meta.txt` records the preflight state (power source, swap in use, swap pages moved, platform profile, CPU governor and energy preference) before the sweep and again after it, the `SHUFFLE_SEED`, the physical and logical CPU counts, and a copy of the params file.
 
+**Published results.** The final experiments (`results/q1/`, `q2/`, `q2b/`, `q3/`, `q4a/`, `q4b/`, `q5/`, one timestamped folder each) are committed with `results.tsv`, `failures.tsv`, `runlist.tsv`, `meta.txt` and `logs/`, **without `latencies/`**: only Q5 writes latency files (136 files, 200 MB), which are kept in an archive outside the repository and go to a GitHub release. Not committed (`.gitignore`): `results/quick/` and `results/dev/` (development runs) and `results/full/`. `results/sizing/` (the sizing measurements, section Sizing measurements) was tracked before this policy and stays.
+
+**`results/full/` was a dress rehearsal and is excluded from the analysis.** It is the first sweep of the runner (2026-11-15, `params.sh`, only the four `sequential` variants at that time: 116 runs of 10 repetitions + 1 warm-up) and does not meet the run conditions: its commit is `d7bc596-dirty` (uncommitted changes), the platform profile was `balanced` (not `performance`), about 120 MB of swap was in use, and the sequential variants and the runner were afterwards refactored (the Worker handles of round 1), so the code is older than that of every other experiment. It is kept locally, not published. It is not needed: every experiment that needs a baseline measured `sequential` again, in the same conditions as its other variants (Q1, Q2, Q2b, Q3, Q4a and Q4b in all four languages, Q5 in Java and C).
+
 ## Analysis plan
 
 Python reads the final `results.tsv` and the latency files and computes the standard concurrent-performance metrics; nothing below is computed by the implementations. T(p) is the time with p workers.

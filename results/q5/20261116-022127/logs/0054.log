@@ -1,0 +1,8 @@
+java 25.0.5.0.3, mode mixed-50-50, 16 worker(s), 1 warm-up + 5 repetitions
+clock reading cost: 14 ns (mean of 1000000 back-to-back readings)
+rep 0: sum of query result sizes = 571600959
+rep 1: sum of query result sizes = 571613524
+rep 2: sum of query result sizes = 571646381
+rep 3: sum of query result sizes = 571576048
+rep 4: sum of query result sizes = 571610794
+rep 5: sum of query result sizes = 571630910
