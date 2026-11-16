@@ -9,17 +9,28 @@ import "strings"
 // no lock either. A worker takes increasing document IDs, so each private list is already
 // sorted and the merge of a term is an N-way merge in document order. The result is an index
 // partitioned by term; queries (query mode, after Finish) read it with no lock.
+//
+// The N-way merge of one term has two versions that differ in nothing else (private-merge and
+// private-merge-heap): a linear scan of the heads of the k lists for every posting (O(k) per
+// posting) or a binary min-heap of the heads (O(log k) per posting).
 type PrivateMergeIndex struct {
 	n        int                       // workers = piles
+	heap     bool                      // merge with a heap instead of a linear scan
 	handles  []*pmWorker               // one per worker
 	merged   []map[string]*PostingList // merged[i]: the terms of pile i
 	docs     int
 	postings int64
 }
 
-// NewPrivateMergeIndex returns an empty index for the given number of workers.
+// NewPrivateMergeIndex returns an empty index for the given number of workers, with the
+// linear-scan merge (private-merge).
 func NewPrivateMergeIndex(workers int) *PrivateMergeIndex {
 	return &PrivateMergeIndex{n: workers}
+}
+
+// NewPrivateMergeHeapIndex returns the same index with the binary min-heap merge (private-merge-heap).
+func NewPrivateMergeHeapIndex(workers int) *PrivateMergeIndex {
+	return &PrivateMergeIndex{n: workers, heap: true}
 }
 
 // pmWorker is one worker's private index plus its private scratch state.
@@ -84,6 +95,8 @@ func (x *PrivateMergeIndex) mergePile(i int) {
 	for term, lists := range parts {
 		if len(lists) == 1 {
 			result[term] = lists[0] // one list: reuse it
+		} else if x.heap {
+			result[term] = mergeListsHeap(lists)
 		} else {
 			result[term] = mergeLists(lists)
 		}
@@ -111,6 +124,68 @@ func mergeLists(lists []*PostingList) *PostingList {
 		at[best]++
 	}
 	return out
+}
+
+// mergeListsHeap is the same merge with a binary min-heap: it holds one entry per list that is not
+// exhausted, the head document ID (key) and the list it comes from (src), with the smallest key at
+// the root. Each posting takes the root, then replaces it by the next head of the same list or, if
+// the list is exhausted, by the last entry, and sifts it down: O(log k).
+func mergeListsHeap(lists []*PostingList) *PostingList {
+	total := 0
+	for _, l := range lists {
+		total += l.Size()
+	}
+	out := &PostingList{Docs: make([]int32, 0, total), Freqs: make([]int32, 0, total)}
+	at := make([]int, len(lists))
+	key := make([]int32, len(lists))
+	src := make([]int, len(lists))
+	size := 0
+	for j, l := range lists {
+		if l.Size() > 0 {
+			key[size] = l.Docs[0]
+			src[size] = j
+			size++
+		}
+	}
+	for i := size/2 - 1; i >= 0; i-- { // build the heap
+		siftDown(key, src, size, i)
+	}
+	for n := 0; n < total; n++ {
+		j := src[0]
+		l := lists[j]
+		out.Docs = append(out.Docs, key[0])
+		out.Freqs = append(out.Freqs, l.Freqs[at[j]])
+		at[j]++
+		if at[j] < len(l.Docs) {
+			key[0] = l.Docs[at[j]] // the next head of the same list
+		} else {
+			size-- // list exhausted: the last entry takes the root
+			key[0] = key[size]
+			src[0] = src[size]
+		}
+		siftDown(key, src, size, 0)
+	}
+	return out
+}
+
+// siftDown moves the entry at position i down until both its children have larger keys.
+func siftDown(key []int32, src []int, size, i int) {
+	k0, s0 := key[i], src[i]
+	for {
+		c := 2*i + 1 // left child
+		if c >= size {
+			break
+		}
+		if c+1 < size && key[c+1] < key[c] { // the smaller child
+			c++
+		}
+		if key[c] >= k0 {
+			break
+		}
+		key[i], src[i] = key[c], src[c]
+		i = c
+	}
+	key[i], src[i] = k0, s0
 }
 
 func (x *PrivateMergeIndex) Get(term string) *PostingList {

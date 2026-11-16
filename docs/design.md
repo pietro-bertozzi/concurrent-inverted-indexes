@@ -428,6 +428,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **Java.** `PrivateMergeIndex` moved from `private-merge/` to `_common/`; the heap is two `int[]` (`key`, the head document ID, and `src`, the list it comes from) of length k with `siftDown` written out (the entry being moved is held and the children are moved up, not swapped). **Cross-check:** dumps identical to `sequential` on the 8 MB corpus, build mode, at 1, 2, 5, 8 and 22 workers, for `private-merge` and `private-merge-heap`.
 
+**Go.** `privatemerge.go` moved from `private-merge/` to `_common/`; `NewPrivateMergeHeapIndex` sets the `heap` field, and `mergePile` calls `mergeListsHeap` instead of `mergeLists` for terms with more than one list. The heap is two slices (`key []int32`, `src []int`) with `siftDown` as a separate function. The output slices are allocated once with the final capacity, as in `mergeLists`. **Cross-check:** dumps identical to `sequential` (Java's reference dump) on the 8 MB corpus, build mode, at 1, 2, 5, 8 and 22 workers, for both variants.
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.
