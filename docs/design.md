@@ -432,6 +432,8 @@ The questions and the variants are in `docs/experiment-plan.md`; this section fi
 
 **C++.** `private_merge_index.hpp` moved from `private-merge/` to `_common/`; the constructor takes a `heap` flag (default false, so `private-merge`'s `main.cpp` is unchanged) and `mergePile` calls `mergeListsHeap` instead of `mergeLists` for the terms with further lists (the first list of a term is moved into the result as before, the merge replaces it). The heap is two `std::vector`s (`key`, `src`) with a static `siftDown`; the output vectors are `reserve`d to the final size. **Cross-check:** dumps identical to `sequential` on the 8 MB corpus at 1, 2, 5, 8 and 22 workers, for both variants.
 
+**C.** `private_merge_index.c` was already in `_common/` (shared with `private-merge-static`); `PrivateMergeIndex` has a new field `heap` and a third constructor, `private_merge_heap_index_new`. The loop of `merge_multi` is now two static functions, `merge_linear` (the old loop, unchanged) and `merge_heap`, chosen by the field; `merge_multi` allocates the output arrays once at their final size and frees the input arrays afterwards, whichever merge runs. The heap is two arrays (`int32_t *key`, `int *src`) with `sift_down`. The first list of a term still moves into the merged map without a copy. **Cross-check:** dumps identical to `sequential` on the 8 MB corpus at 1, 2, 5, 8 and 22 workers for `private-merge`, `private-merge-static` and `private-merge-heap`; AddressSanitizer + UBSan and ThreadSanitizer (`setarch -R`) report nothing for `private-merge-heap` in build and query mode (4 MB corpus, 8 workers).
+
 ### Queries
 
 - Each worker starts at its `offset` in the query file and **cycles** through it.

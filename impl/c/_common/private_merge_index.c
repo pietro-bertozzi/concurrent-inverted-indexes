@@ -25,6 +25,7 @@ typedef struct {
 struct PrivateMergeIndex {
     Index base;           // must be first: the harness sees only this part
     int n;                // workers = piles
+    int heap;             // 1 = merge with a binary min-heap, 0 = linear scan
     Handle **handles;     // the handles made so far, freed in destroy
     int handle_count;
     TermMap *merged;      // merged[i]: the terms of pile i, set by finish()
@@ -117,9 +118,79 @@ static Multi *multiset_get(MultiSet *s, PostingList *first) {
     return m;
 }
 
-// N-way merge of the first list and the others (sorted, disjoint document IDs): repeatedly take
-// the smallest head. The result replaces the first list; the arrays of the others are freed.
-static void merge_multi(Multi *m) {
+// Linear-scan merge of k sorted lists with disjoint document IDs into `out` (arrays of `total`
+// entries): for every posting, scan the k heads and take the smallest. O(k) per posting.
+static void merge_linear(PostingList **lists, int k, size_t total, PostingList *out) {
+    size_t *at = xcalloc((size_t)k, sizeof(size_t));
+    for (size_t n = 0; n < total; n++) {
+        int best = -1;
+        for (int j = 0; j < k; j++)
+            if (at[j] < lists[j]->size && (best < 0 || lists[j]->docs[at[j]] < lists[best]->docs[at[best]])) best = j;
+        out->docs[n] = lists[best]->docs[at[best]];
+        out->freqs[n] = lists[best]->freqs[at[best]];
+        at[best]++;
+    }
+    free(at);
+}
+
+// Moves the entry at position i of the heap (key = head document ID, src = the list it comes
+// from) down until both its children have larger keys.
+static void sift_down(int32_t *key, int *src, int size, int i) {
+    int32_t k0 = key[i];
+    int s0 = src[i];
+    for (;;) {
+        int c = 2 * i + 1;                                   // left child
+        if (c >= size) break;
+        if (c + 1 < size && key[c + 1] < key[c]) c++;        // the smaller child
+        if (key[c] >= k0) break;
+        key[i] = key[c];
+        src[i] = src[c];
+        i = c;
+    }
+    key[i] = k0;
+    src[i] = s0;
+}
+
+// The same merge with a binary min-heap: it holds one entry per list that is not exhausted, the
+// head document ID (key) and the list it comes from (src), with the smallest key at the root.
+// Each posting takes the root, then replaces it by the next head of the same list or, if the
+// list is exhausted, by the last entry, and sifts it down. O(log k) per posting.
+static void merge_heap(PostingList **lists, int k, size_t total, PostingList *out) {
+    size_t *at = xcalloc((size_t)k, sizeof(size_t));
+    int32_t *key = xmalloc((size_t)k * sizeof(int32_t));
+    int *src = xmalloc((size_t)k * sizeof(int));
+    int size = 0;
+    for (int j = 0; j < k; j++) {
+        if (lists[j]->size > 0) {
+            key[size] = lists[j]->docs[0];
+            src[size] = j;
+            size++;
+        }
+    }
+    for (int i = size / 2 - 1; i >= 0; i--) sift_down(key, src, size, i);   // build the heap
+    for (size_t n = 0; n < total; n++) {
+        int j = src[0];
+        out->docs[n] = key[0];
+        out->freqs[n] = lists[j]->freqs[at[j]];
+        at[j]++;
+        if (at[j] < lists[j]->size) {
+            key[0] = lists[j]->docs[at[j]];   // the next head of the same list
+        } else {
+            size--;                           // list exhausted: the last entry takes the root
+            key[0] = key[size];
+            src[0] = src[size];
+        }
+        sift_down(key, src, size, 0);
+    }
+    free(src);
+    free(key);
+    free(at);
+}
+
+// N-way merge of the first list and the others (sorted, disjoint document IDs), with the
+// linear scan or, if `heap` is set, the binary min-heap. The result replaces the first list;
+// the arrays of the others are freed.
+static void merge_multi(Multi *m, int heap) {
     int k = m->count + 1;
     PostingList **lists = xmalloc((size_t)k * sizeof(PostingList *));
     PostingList old = *m->first;                 // the first list's arrays, still to be read
@@ -131,22 +202,14 @@ static void merge_multi(Multi *m) {
     first->docs = xmalloc(total * sizeof(int32_t));
     first->freqs = xmalloc(total * sizeof(int32_t));
     first->size = first->capacity = total;
-    size_t *at = xcalloc((size_t)k, sizeof(size_t));
-    for (size_t n = 0; n < total; n++) {
-        int best = -1;
-        for (int j = 0; j < k; j++)
-            if (at[j] < lists[j]->size && (best < 0 || lists[j]->docs[at[j]] < lists[best]->docs[at[best]])) best = j;
-        first->docs[n] = lists[best]->docs[at[best]];
-        first->freqs[n] = lists[best]->freqs[at[best]];
-        at[best]++;
-    }
+    if (heap) merge_heap(lists, k, total, first);
+    else merge_linear(lists, k, total, first);
     for (int j = 0; j < k; j++) {
         free(lists[j]->docs);
         free(lists[j]->freqs);
         lists[j]->docs = lists[j]->freqs = NULL;
         lists[j]->size = lists[j]->capacity = 0;
     }
-    free(at);
     free(lists);
 }
 
@@ -181,7 +244,7 @@ static void merge_pile(void *context, int i) {
         }
     }
     for (int k = 0; k < multi.count; k++) {
-        merge_multi(&multi.items[k]);
+        merge_multi(&multi.items[k], x->heap);
         free(multi.items[k].others);
     }
     free(multi.items);
@@ -245,8 +308,9 @@ static void destroy(Index *self) {
     free(x);
 }
 
-// Makes an empty index for args->threads workers; static_split chooses how documents are handed out.
-static Index *new_index(const Args *args, int static_split) {
+// Makes an empty index for args->threads workers; static_split chooses how documents are handed out,
+// heap chooses the merge of a term's lists (binary min-heap or linear scan).
+static Index *new_index(const Args *args, int static_split, int heap) {
     PrivateMergeIndex *x = xcalloc(1, sizeof(PrivateMergeIndex));
     x->base.worker = worker;
     x->base.get = get;
@@ -258,9 +322,12 @@ static Index *new_index(const Args *args, int static_split) {
     x->base.destroy = destroy;
     x->base.static_split = static_split;
     x->n = args->threads;
+    x->heap = heap;
     return &x->base;
 }
 
-Index *private_merge_index_new(const Args *args) { return new_index(args, 0); }
+Index *private_merge_index_new(const Args *args) { return new_index(args, 0, 0); }
 
-Index *private_merge_static_index_new(const Args *args) { return new_index(args, 1); }
+Index *private_merge_static_index_new(const Args *args) { return new_index(args, 1, 0); }
+
+Index *private_merge_heap_index_new(const Args *args) { return new_index(args, 0, 1); }
