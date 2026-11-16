@@ -65,7 +65,7 @@ def load(experiment):
     if len(files) != 1:
         sys.exit(f"expected one results.tsv for {experiment}, found {len(files)}")
     d = pd.read_csv(files[0], sep="\t", dtype={"run": str, "partitions": str, "batch": str, "queue": str})
-    d = d[d.warmup == 0].copy()
+    d = d[(d.warmup == 0) & d.scaling.str.contains("strong")].copy()   # design.md: a "contains" test, 1-worker runs are "strong,weak"
     d["total_ns"] = d.build_ns + d.finalize_ns          # build + merge
     d["cpu_ns"] = d.cpu_user_ns + d.cpu_sys_ns
     return d
@@ -188,7 +188,6 @@ def fig_q1():
 
 def fig_q2():
     q2, q2b = load("q2"), load("q2b")
-    q2 = q2[(q2.scaling == "strong") | (q2.variant == "sequential")]
     q2 = q2[q2.corpus_mb == 128]
     variants = [("partition-lock", q2, {"partitions": "64", "batch": "64"}),
                 ("private-merge", q2, {}), ("private-merge-heap", q2b, {})]
@@ -198,7 +197,7 @@ def fig_q2():
         x = np.arange(len(WORKERS))
         w = 0.27
         seq = q2[(q2.language == lang) & (q2.variant == "sequential")]
-        ax.bar(x[0], seq.total_ns.median() / 1e9, w * 0.9, color=COLOR["sequential"], label="sequential")
+        ax.axhline(seq.total_ns.median() / 1e9, color=COLOR["sequential"], lw=1.2, ls="-.", zorder=1)
         for i, (var, d, where) in enumerate(variants):
             dd = d[(d.language == lang) & (d.variant == var)]
             for k, v in where.items():
@@ -211,6 +210,7 @@ def fig_q2():
             if var == "private-merge":
                 shares[lang] = (m / (b + m)).loc[16]
         ax.set_xticks(x, [str(t) for t in WORKERS])
+        ax.set_ylim(top=ax.get_ylim()[1] * 1.06)
         ax.set_xlabel("workers (threads)")
         ax.set_ylabel("time, median (s)")
         for xv, (wk, _) in zip([WORKERS.index(6), WORKERS.index(12), WORKERS.index(16)], HW_LINES):
@@ -219,7 +219,8 @@ def fig_q2():
             for wk, text in HW_LINES:
                 hw_label(ax, WORKERS.index(wk), text)
         ax.set_title(LANG_NAME[lang], loc="left", fontweight="bold")
-    h = [plt.Rectangle((0, 0), 1, 1, color=COLOR[v], label=v) for v in ["sequential"] + [v for v, _, _ in variants]]
+    h = [plt.Rectangle((0, 0), 1, 1, color=COLOR[v], label=v) for v in [v for v, _, _ in variants]]
+    h += [line(COLOR["sequential"], "-.", label="sequential")]
     h += [plt.Rectangle((0, 0), 1, 1, fill=False, hatch="////", edgecolor=INK2, label="merge (hatched, on top of build)")]
     legend_below(fig, h, 5)
     title(fig, f"Q2: private indexes build faster, but the merge costs more than it saves "
@@ -235,7 +236,6 @@ def first_measured(d):
 
 def fig_q2_memory():
     q2, q2b = first_measured(load("q2")), first_measured(load("q2b"))
-    q2 = q2[(q2.scaling == "strong") | (q2.variant == "sequential")]
     q2 = q2[q2.corpus_mb == 128]
     variants = [("partition-lock", q2, {"partitions": "64", "batch": "64"}),
                 ("private-merge", q2, {}), ("private-merge-heap", q2b, {})]
@@ -267,7 +267,7 @@ def fig_q2_memory():
 
 def fig_q3():
     d = load("q3")
-    shade = {"1": "#f3b79a", "64": COLOR["partition-writers"], "1024": "#8a3513"}
+    shade = {"1": "#5b1a05", "64": COLOR["partition-writers"], "1024": "#f5a26f"}
     ls_of = {"4": "--", "64": "-"}
     fig, axes = panels(4, 2, w=5.2, h=3.4)
     gm = {}
@@ -345,7 +345,6 @@ def fig_q3_cpu():
 
 def fig_q4_pinning():
     q2, q4a = load("q2"), load("q4a")
-    q2 = q2[(q2.scaling == "strong") | (q2.variant == "sequential")]
     q2 = q2[q2.corpus_mb == 128]
     cfg = [("partition-lock", {"partitions": "64", "batch": "64"}), ("private-merge", {})]
     fig, axes = panels(4, 2, w=5.2, h=3.4)
@@ -354,20 +353,21 @@ def fig_q4_pinning():
             for d, ls, mk in [(q2, "-", "o"), (q4a, "--", "s")]:
                 s = speedup(d, lang, "total_ns", variant=var, **where)
                 ax.plot(s.index, s.values, color=COLOR[var], ls=ls, marker=mk, ms=3.5)
-        ax.plot([1, 22], [1, 22], color=GRID, lw=1, zorder=0.4)
+        ax.plot([1, 22], [1, 22], color="#c9c8c3", lw=1, zorder=0.4)
         hw_lines(ax, label=(lang == LANGS[0]))
         worker_axis(ax)
         ax.set_ylim(0, 7.5)
         ax.set_ylabel("speedup vs sequential, build + merge (×)")
         ax.set_title(LANG_NAME[lang], loc="left", fontweight="bold")
     h = [line(COLOR["partition-lock"], label="partition-lock"), line(COLOR["private-merge"], label="private-merge"),
-         line(INK2, "-", "o", "unpinned (Q2)"), line(INK2, "--", "s", "pinned to P-cores, up to 12 (Q4a)")]
-    legend_below(fig, h, 4)
+         line(INK2, "-", "o", "unpinned (Q2)"), line(INK2, "--", "s", "pinned to P-cores, up to 12 (Q4a)"),
+         line("#c9c8c3", "-", label="ideal linear speedup")]
+    legend_below(fig, h, 5)
     r = pd.concat([speedup(q4a, l, "total_ns", variant="partition-lock", partitions="64", batch="64")
                    / speedup(q2, l, "total_ns", variant="partition-lock", partitions="64", batch="64")
                    for l in LANGS]).dropna()
     r = r[r.index > 1]
-    title(fig, f"Q4: pinning to the P-cores leaves partition-lock within {1-r.min():.0%}/+{r.max()-1:.0%} up to "
+    title(fig, f"Q4: pinning to the P-cores changes partition-lock's speedup from {r.min()-1:+.0%} to {r.max()-1:+.0%} up to "
                f"12 workers; the bend at 6 stays, so it is the hardware")
     save(fig, "q4-pinning")
 
@@ -457,7 +457,7 @@ def fig_q5():
             r = {l: curve(d[(d.language == l) & (d["mode"] == "query")], "throughput", variant="partition-rwlock").loc[22]
                  / curve(d[(d.language == l) & (d["mode"] == "query")], "throughput", variant="partition-lock").loc[22]
                  for l in ["java", "c"]}
-            title(fig, f"Q5: the read/write lock gives {r['java']:.1f}× (Java) and {r['c']:.1f}× (C) the throughput "
+            title(fig, f"Q5: the read/write lock gives {r['java']:.1f}× (Java) and {r['c']:.1f}× (C) the throughput\n"
                        f"of a plain lock in query mode at 22 workers, and still wins with 80% writes")
         else:
             r = pd.Series({(l, mo): curve(lat[(lat.language == l) & (lat["mode"] == mo)], "p99_ns", variant="partition-rwlock").loc[22]
@@ -472,18 +472,18 @@ def fig_q5():
 
 def print_numbers():
     """The numbers quoted in docs/experiment-plan.md that this script is the source of."""
-    q2 = load("q2"); q2 = q2[(q2.scaling == "strong") | (q2.variant == "sequential")]; q2 = q2[q2.corpus_mb == 128]
+    q2 = load("q2"); q2 = q2[q2.corpus_mb == 128]
     pl = {"partitions": "64", "batch": "64"}
     print("Q2 merge share of private-merge total, 16 workers (%):")
     for l in LANGS:
         d = q2[q2.language == l]
         print(f"  {l}: {curve(d, 'finalize_ns', variant='private-merge').loc[16] / curve(d, 'total_ns', variant='private-merge').loc[16] * 100:.1f}")
     q2f = first_measured(q2)
-    print("Q2 peak memory, first measured repetition, MiB: private-merge 2 and 22 workers; partition-lock 2 and 22; ratio at 22")
+    print("Q2 peak memory, first measured repetition, MiB: private-merge 1 and 22 workers; partition-lock 1 and 22; ratio at 22")
     for l in LANGS:
         d = q2f[q2f.language == l]
         a, b = curve(d, "peak_rss_bytes", variant="private-merge") / 2**20, curve(d, "peak_rss_bytes", variant="partition-lock", **pl) / 2**20
-        print(f"  {l}: {a.loc[2]:.0f} {a.loc[22]:.0f} | {b.loc[2]:.0f} {b.loc[22]:.0f} | {a.loc[22] / b.loc[22]:.2f}")
+        print(f"  {l}: {a.loc[1]:.0f} {a.loc[22]:.0f} | {b.loc[1]:.0f} {b.loc[22]:.0f} | {a.loc[22] / b.loc[22]:.2f}")
     q4a, q4b = load("q4a"), load("q4b")
     print("Q4 (C) static / dynamic - 1, in %, build and build + merge, unpinned then pinned:")
     for name, d in [("unpinned", q4b), ("pinned", q4a)]:
