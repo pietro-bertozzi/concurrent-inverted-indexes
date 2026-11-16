@@ -26,6 +26,8 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 FIG_DIR = ROOT / "analysis" / "figures"
+SLIDES = False          # --slides: 16:9, no title, large fonts, thick lines, written to figures/slides/
+DROP_MARKERS = False    # slides: the dense q1 figure is drawn without markers
 LAT_TABLE = ROOT / "analysis" / "data" / "q5-latency-percentiles.tsv"
 
 LANGS = ["java", "go", "cpp", "c"]
@@ -55,6 +57,48 @@ plt.rcParams.update({
     "figure.facecolor": "white", "axes.facecolor": "white", "savefig.facecolor": "white",
     "lines.linewidth": 1.8, "lines.markersize": 5, "svg.fonttype": "none", "svg.hashsalt": "concurrent-inverted-indexes",
 })
+
+
+def msize(x):
+    """Marker size: larger in slides, none where DROP_MARKERS."""
+    return 0 if DROP_MARKERS else (x * 2.2 if SLIDES else x)
+
+
+def lwid(x):
+    """Line width of an explicit line: thicker in slides."""
+    return x * 2 if SLIDES else x
+
+
+def fsize(x):
+    """Font size of an explicit text: about twice as large in slides."""
+    return x * 2 if SLIDES else x
+
+
+def mk(marker):
+    """A marker, or none in the figures drawn without markers."""
+    return None if DROP_MARKERS else marker
+
+
+# Slides: the same figures at 12 x 6.75 in, text about twice as large. Applied by main() on --slides.
+SLIDE_RC = {
+    "font.size": 17, "axes.titlesize": 20, "axes.titlepad": 8, "axes.labelsize": 17, "legend.fontsize": 16,
+    "xtick.labelsize": 16, "ytick.labelsize": 16, "lines.linewidth": 3.6, "lines.markersize": 10,
+    "axes.linewidth": 1.4, "grid.linewidth": 1.0, "xtick.major.width": 1.4, "ytick.major.width": 1.4,
+    "xtick.major.size": 5, "ytick.major.size": 5,
+}
+# Slide axis labels: short, the headline of the slide gives the rest.
+SLIDE_YLABEL = {
+    "speedup vs sequential (×)": "speedup (×)",
+    "speedup vs sequential, build + merge (×)": "speedup (×)",
+    "time, median (s)": "time (s)",
+    "peak memory, first measured rep (MiB)": "peak memory (MiB)",
+    "time lock / time messages (>1: messages win)": "time ratio",
+    "kernel share: sys / (user + sys) (%)": "kernel share (%)",
+    "build time, median (s)": "build time (s)",
+    "build + merge, median (s)": "build + merge (s)",
+    "throughput, median (thousand ops/s)": "throughput (k ops/s)",
+    "p99 query latency, median of reps (µs)": "p99 latency (µs)",
+}
 
 
 # ----------------------------------------------------------------------------- loading
@@ -94,16 +138,18 @@ def speedup(d, lang, value="build_ns", **where):
 def hw_lines(ax, label=False, compact=False):
     """Vertical dashed lines at the hardware boundaries (numeric worker axis)."""
     for x, text in HW_LINES:
-        ax.axvline(x, color="#a8a7a2", ls=(0, (4, 3)), lw=0.9, zorder=0.5)
+        ax.axvline(x, color="#a8a7a2", ls=(0, (4, 3)), lw=lwid(0.9), zorder=0.5)
         if label:
             hw_label(ax, x, str(x) if compact else text)
 
 
 def hw_label(ax, x, text, xpos=None):
     """Small label above a boundary line; the 12 and 16 labels lean apart so they never touch."""
+    if SLIDES:          # slides: the dashed lines are explained in the legend instead
+        return
     ha = {"12 P-threads": "right", "16 cores": "left"}.get(text, "center")
     ax.text(x if xpos is None else xpos, 1.01, text, transform=ax.get_xaxis_transform(), ha=ha,
-            va="bottom", fontsize=6.5, color=INK2)
+            va="bottom", fontsize=fsize(6.5), color=INK2)
 
 
 def worker_axis(ax):
@@ -112,12 +158,31 @@ def worker_axis(ax):
     ax.set_xlabel("workers (threads)")
 
 
+def slide_labels(fig):
+    """Slides: short y labels, and a label that every panel of a row or column shares is written once."""
+    axes = fig.axes
+    first = axes[0].get_ylabel()
+    same_y = all(SLIDE_YLABEL.get(a.get_ylabel(), a.get_ylabel()) == SLIDE_YLABEL.get(first, first) for a in axes)
+    for a in axes:
+        a.set_ylabel(SLIDE_YLABEL.get(a.get_ylabel(), a.get_ylabel()))
+        spec = a.get_subplotspec()
+        if same_y and spec.colspan.start > 0:
+            a.set_ylabel("")
+        if spec.rowspan.stop < axes[0].get_subplotspec().get_gridspec().nrows:
+            a.set_xlabel("")
+
+
 def save(fig, name):
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+    if SLIDES:
+        slide_labels(fig)
     for ext in ("png", "svg"):
         # fixed hash salt and no date: the same data gives byte-identical files (clean git diffs)
         meta = {"Date": None} if ext == "svg" else {"Software": None}
-        fig.savefig(FIG_DIR / f"{name}.{ext}", dpi=160, bbox_inches="tight", metadata=meta)
+        if SLIDES:      # exactly 12 x 6.75 in: no tight bounding box
+            fig.savefig(FIG_DIR / f"{name}.{ext}", dpi=200, metadata=meta)
+        else:
+            fig.savefig(FIG_DIR / f"{name}.{ext}", dpi=160, bbox_inches="tight", metadata=meta)
     plt.close(fig)
     print("wrote", name)
 
@@ -162,6 +227,8 @@ def wrap_title(fig, t):
 
 
 def title(fig, text, sub=None):
+    if SLIDES:          # the slide headline carries the title
+        return
     if len(fig.axes) <= 2:
         fig.subplots_adjust(top=0.8)
     t = fig.suptitle(text, x=0.01, ha="left", fontsize=12, fontweight="bold", y=1.0)
@@ -173,12 +240,33 @@ def title(fig, text, sub=None):
 
 def panels(n, ncols, w=3.6, h=3.0, **kw):
     nrows = -(-n // ncols)
+    if SLIDES:          # 16:9 whatever the number of panels; two columns at most
+        ncols = min(ncols, 2)
+        nrows = -(-n // ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(12, 6.75), squeeze=False, **kw)
+        fig.subplots_adjust(left=0.105, right=0.99, top=0.93, bottom=0.30 if nrows == 2 else 0.33,
+                            hspace=0.62 if nrows == 2 else 0.3, wspace=0.26)
+        return fig, axes.ravel()
     fig, axes = plt.subplots(nrows, ncols, figsize=(w * ncols, h * nrows), squeeze=False,
                              gridspec_kw={"hspace": 0.55, "wspace": 0.28}, **kw)
     return fig, axes.ravel()
 
 
 def legend_below(fig, handles, ncol, y=-0.01):
+    if SLIDES:          # outside the data, under the panels
+        # the grey vertical lines get one legend entry (the word "dashed" is taken by the data lines)
+        handles = [h for h in handles if not h.get_label().startswith("dashed:")]
+        handles.append(line("#a8a7a2", (0, (4, 3)), label="vertical lines: 6 P-cores, 12 P-threads, 16 cores"))
+        columns = 3
+        for size in (16, 15, 14, 13, 12):      # the largest text that fits the width of the slide
+            leg = fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=columns,
+                             frameon=False, handlelength=2.0, columnspacing=1.0, labelspacing=0.25, fontsize=size)
+            box = leg.get_window_extent(fig.canvas.get_renderer())
+            if box.x0 >= 0 and box.x1 <= fig.bbox.width:
+                break
+            leg.remove()
+        fig.subplots_adjust(bottom=0.135 + 0.062 * (-(-len(handles) // columns)))    # room for the legend rows
+        return
     fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, y), ncol=ncol,
                frameon=False, handlelength=2.6)
 
@@ -190,6 +278,8 @@ def line(color, ls="-", marker=None, label=None):
 # ----------------------------------------------------------------------------- Q1
 
 def fig_q1():
+    global DROP_MARKERS
+    DROP_MARKERS = SLIDES      # slides: the densest figure has no markers
     d = load("q1")
     d = d[d.variant != "sequential"]
     all_d = load("q1")
@@ -203,9 +293,9 @@ def fig_q1():
         for (var, part, batch), _ in d[d.language == lang].groupby(["variant", "partitions", "batch"]):
             key = var if var == "global-lock" else (var, part)
             sp = speedup(all_d, lang, variant=var, partitions=part, batch=batch)
-            ax.plot(sp.index, sp.values, color=shade[key], ls=ls_of[batch], marker=mk_of[batch], ms=3.5)
+            ax.plot(sp.index, sp.values, color=shade[key], ls=ls_of[batch], marker=mk(mk_of[batch]), ms=msize(3.5))
             best[(lang, var, part)] = max(best.get((lang, var, part), 0), sp.max())
-        ax.axhline(1, color=INK2, lw=0.9)
+        ax.axhline(1, color=INK2, lw=lwid(0.9))
         hw_lines(ax, label=(lang == LANGS[0]))
         worker_axis(ax)
         ax.set_yscale("log", base=2)
@@ -217,12 +307,13 @@ def fig_q1():
     h = [line(shade["global-lock"], label="global-lock"),
          line(shade[("partition-lock", "4")], label="partition-lock, 4 partitions"),
          line(shade[("partition-lock", "64")], label="partition-lock, 64 partitions"),
-         line(INK2, ":", "o", "batch 1"), line(INK2, "--", "s", "batch 64"), line(INK2, "-", "^", "batch 1024")]
+         line(INK2, ":", mk("o"), "batch 1"), line(INK2, "--", mk("s"), "batch 64"), line(INK2, "-", mk("^"), "batch 1024")]
     legend_below(fig, h, 3)
     p64 = [best[(l, "partition-lock", "64")] for l in LANGS]
     title(fig, f"Q1: one lock stops at 1.3-1.7×; 64 partitions reach {min(p64):.1f}-{max(p64):.1f}×, "
                f"and a lock per posting is slower than no parallelism")
     save(fig, "q1-speedup")
+    DROP_MARKERS = False
 
 
 # ----------------------------------------------------------------------------- Q2
@@ -238,7 +329,7 @@ def fig_q2():
         x = np.arange(len(WORKERS))
         w = 0.27
         seq = q2[(q2.language == lang) & (q2.variant == "sequential")]
-        ax.axhline(seq.total_ns.median() / 1e9, color=COLOR["sequential"], lw=1.2, ls="-.", zorder=1)
+        ax.axhline(seq.total_ns.median() / 1e9, color=COLOR["sequential"], lw=lwid(1.2), ls="-.", zorder=1)
         for i, (var, d, where) in enumerate(variants):
             dd = d[(d.language == lang) & (d.variant == var)]
             for k, v in where.items():
@@ -247,7 +338,7 @@ def fig_q2():
             m = dd.groupby("threads").finalize_ns.median().reindex(WORKERS) / 1e9
             xs = x + (i - 1) * w
             ax.bar(xs, b, w * 0.9, color=COLOR[var], label=var)
-            ax.bar(xs, m, w * 0.9, bottom=b, color="white", edgecolor=COLOR[var], hatch="////", lw=0.6)
+            ax.bar(xs, m, w * 0.9, bottom=b, color="white", edgecolor=COLOR[var], hatch="////", lw=lwid(0.6))
             if var == "private-merge":
                 shares[lang] = (m / (b + m)).loc[16]
         ax.set_xticks(x, [str(t) for t in WORKERS])
@@ -255,7 +346,7 @@ def fig_q2():
         ax.set_xlabel("workers (threads)")
         ax.set_ylabel("time, median (s)")
         for xv, (wk, _) in zip([WORKERS.index(6), WORKERS.index(12), WORKERS.index(16)], HW_LINES):
-            ax.axvline(xv, color="#a8a7a2", ls=(0, (4, 3)), lw=0.9, zorder=0.5)
+            ax.axvline(xv, color="#a8a7a2", ls=(0, (4, 3)), lw=lwid(0.9), zorder=0.5)
         if lang == LANGS[0]:
             for wk, text in HW_LINES:
                 hw_label(ax, WORKERS.index(wk), text)
@@ -286,11 +377,11 @@ def fig_q2_memory():
         for var, d, where in variants:
             dd = d[d.language == lang]
             s = curve(dd, "peak_rss_bytes", variant=var, **where) / 2**20
-            ax.plot(s.index, s.values, color=COLOR[var], marker="o", ms=3.5, label=var)
+            ax.plot(s.index, s.values, color=COLOR[var], marker="o", ms=msize(3.5), label=var)
             if var == "private-merge":
                 ratio[lang] = s.loc[22] / (curve(dd, "peak_rss_bytes", variant="partition-lock", **variants[0][2]).loc[22] / 2**20)
         s = curve(q2[q2.language == lang], "peak_rss_bytes", variant="sequential") / 2**20
-        ax.axhline(s.iloc[0], color=COLOR["sequential"], lw=1, ls="-.", label="sequential")
+        ax.axhline(s.iloc[0], color=COLOR["sequential"], lw=lwid(1), ls="-.", label="sequential")
         hw_lines(ax, label=(lang == LANGS[0]))
         worker_axis(ax)
         ax.set_ylim(bottom=0)
@@ -319,10 +410,10 @@ def fig_q3():
             for q in ["4", "64"]:
                 wr = curve(dl, "build_ns", variant="partition-writers", batch=batch, queue=q)
                 r = (lock / wr).loc[WORKERS]
-                ax.plot(r.index, r.values, color=shade[batch], ls=ls_of[q], marker="o", ms=3)
+                ax.plot(r.index, r.values, color=shade[batch], ls=ls_of[q], marker="o", ms=msize(3))
                 if batch == "64" and q == "64":
                     gm[lang] = float(np.exp(np.log(r.loc[2:]).mean()))
-        ax.axhline(1, color=INK2, lw=0.9)
+        ax.axhline(1, color=INK2, lw=lwid(0.9))
         ax.set_yscale("log")
         ax.set_ylim(0.025, 1.5)
         ax.set_yticks([0.03, 0.1, 0.3, 1])
@@ -351,25 +442,29 @@ def fig_q3_cpu():
                       ("partition-writers", "1", {"queue": "64"}), ("partition-writers", "64", {"queue": "64"})]),
             ("kernel", [("partition-lock", "64", {"partitions": "64"}),
                         ("partition-writers", "1", {"queue": "64"}), ("partition-writers", "64", {"queue": "64"})])]
-    fig, axes = panels(8, 4, w=3.6, h=3.0)
+    if SLIDES:          # lighter version: only the kernel-time row, as a 2 x 2 grid
+        rows = rows[1:]
+        fig, axes = panels(4, 2)
+    else:
+        fig, axes = panels(8, 4, w=3.6, h=3.0)
     for r, (col, series) in enumerate(rows):
         for c, lang in enumerate(LANGS):
-            ax = axes[r * 4 + c]
+            ax = axes[(r * 4 + c)]
             dl = d[d.language == lang]
             for var, batch, where in series:
                 s_ = curve(dl, col, variant=var, batch=batch, **where)
-                ax.plot(s_.index, s_.values, color=COLOR[var], ls=ls_of[batch], marker=mk_of[batch], ms=3.5)
-            hw_lines(ax, label=(r == 0), compact=True)
+                ax.plot(s_.index, s_.values, color=COLOR[var], ls=ls_of[batch], marker=mk_of[batch], ms=msize(3.5))
+            hw_lines(ax, label=(c == 0 if SLIDES else r == 0), compact=not SLIDES)
             worker_axis(ax)
             if col == "util":
                 ax.set_ylim(0, 150)
-                ax.axhline(100, color=INK2, lw=0.9)
+                ax.axhline(100, color=INK2, lw=lwid(0.9))
                 ax.set_ylabel("CPU time / (wall × workers) (%)")
             else:
                 ax.set_ylim(0, 100)
                 ax.set_ylabel("kernel share: sys / (user + sys) (%)")
-            ax.set_title(LANG_NAME[lang] + (" - CPU utilization" if r == 0 else " - kernel time"),
-                         loc="left", fontweight="bold", fontsize=9)
+            ax.set_title(LANG_NAME[lang] + ("" if SLIDES else (" - CPU utilization" if r == 0 else " - kernel time")),
+                         loc="left", fontweight="bold", fontsize=fsize(9))
     h = [line(COLOR["partition-lock"], label="partition-lock (64 partitions)"),
          line(COLOR["partition-writers"], label="partition-writers (mailbox 64)"),
          line(INK2, ":", "o", "batch 1"), line(INK2, "-", "s", "batch 64"),
@@ -393,8 +488,8 @@ def fig_q4_pinning():
         for var, where in cfg:
             for d, ls, mk in [(q2, "-", "o"), (q4a, "--", "s")]:
                 s = speedup(d, lang, "total_ns", variant=var, **where)
-                ax.plot(s.index, s.values, color=COLOR[var], ls=ls, marker=mk, ms=3.5)
-        ax.plot([1, 22], [1, 22], color="#c9c8c3", lw=1, zorder=0.4)
+                ax.plot(s.index, s.values, color=COLOR[var], ls=ls, marker=mk, ms=msize(3.5))
+        ax.plot([1, 22], [1, 22], color="#c9c8c3", lw=lwid(1), zorder=0.4)
         hw_lines(ax, label=(lang == LANGS[0]))
         worker_axis(ax)
         ax.set_ylim(0, 7.5)
@@ -420,7 +515,7 @@ def fig_q4_static():
         for var in ["private-merge", "private-merge-static"]:
             for d, ls, mk in [(q4b, "-", "o"), (q4a, "--", "s")]:
                 s = curve(d[d.language == "c"], value, variant=var) / 1e9
-                ax.plot(s.index, s.values, color=COLOR[var], ls=ls, marker=mk, ms=3.5)
+                ax.plot(s.index, s.values, color=COLOR[var], ls=ls, marker=mk, ms=msize(3.5))
         hw_lines(ax, label=(value == "build_ns"))
         worker_axis(ax)
         ax.set_ylim(bottom=0)
@@ -477,7 +572,7 @@ def fig_q5():
                         s = curve(d[(d.language == lang) & (d["mode"] == mode)], "throughput", variant=var)
                     else:
                         s = curve(lat[(lat.language == lang) & (lat["mode"] == mode)], "p99_ns", variant=var) / 1e3
-                    ax.plot(s.index, s.values, color=COLOR[var], ls=ls_of[lang], marker=mk_of[lang], ms=3.5)
+                    ax.plot(s.index, s.values, color=COLOR[var], ls=ls_of[lang], marker=mk_of[lang], ms=msize(3.5))
             hw_lines(ax, label=(mode == modes[0]))
             worker_axis(ax)
             if kind == "tp":
@@ -486,7 +581,8 @@ def fig_q5():
             else:
                 ax.set_yscale("log")
                 lo, hi = ax.get_ylim()
-                ticks = [t for t in [200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000] if lo <= t <= hi]
+                wanted = [500, 1000, 2000, 5000, 10000, 20000] if SLIDES else [200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000]
+                ticks = [t for t in wanted if lo <= t <= hi]
                 ax.set_yticks(ticks, [f"{t:,}" for t in ticks])
                 ax.minorticks_off()
                 ax.set_ylabel("p99 query latency, median of reps (µs)")
@@ -553,12 +649,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rebuild-latency-table", action="store_true",
                     help="recompute analysis/data/q5-latency-percentiles.tsv from the raw latency files")
+    ap.add_argument("--slides", action="store_true",
+                    help="write the slide versions (16:9, no title, large text) to analysis/figures/slides/")
     ap.add_argument("--numbers", action="store_true",
                     help="print the numbers quoted in docs/experiment-plan.md, then exit")
     args = ap.parse_args()
     if args.numbers:
         print_numbers()
         return
+    if args.slides:
+        global SLIDES, FIG_DIR
+        SLIDES, FIG_DIR = True, FIG_DIR / "slides"
+        plt.rcParams.update(SLIDE_RC)
     if args.rebuild_latency_table:
         build_latency_table()
     if not LAT_TABLE.exists():

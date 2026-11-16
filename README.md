@@ -121,6 +121,9 @@ Regenerate every figure (PNG and SVG in `analysis/figures/`) from the committed 
 analysis/.venv/bin/python analysis/make_figures.py
 ```
 
+Slide versions (16:9, no title, large text, written to `analysis/figures/slides/`):
+`analysis/.venv/bin/python analysis/make_figures.py --slides`.
+
 `make_figures.py --numbers` prints the numbers quoted in the Results sections of
 `docs/experiment-plan.md`.
 
