@@ -53,7 +53,7 @@ plt.rcParams.update({
     "text.color": INK, "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6,
     "axes.axisbelow": True, "axes.spines.top": False, "axes.spines.right": False,
     "figure.facecolor": "white", "axes.facecolor": "white", "savefig.facecolor": "white",
-    "lines.linewidth": 1.8, "lines.markersize": 5, "svg.fonttype": "none",
+    "lines.linewidth": 1.8, "lines.markersize": 5, "svg.fonttype": "none", "svg.hashsalt": "concurrent-inverted-indexes",
 })
 
 
@@ -115,7 +115,9 @@ def worker_axis(ax):
 def save(fig, name):
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     for ext in ("png", "svg"):
-        fig.savefig(FIG_DIR / f"{name}.{ext}", dpi=160, bbox_inches="tight")
+        # fixed hash salt and no date: the same data gives byte-identical files (clean git diffs)
+        meta = {"Date": None} if ext == "svg" else {"Software": None}
+        fig.savefig(FIG_DIR / f"{name}.{ext}", dpi=160, bbox_inches="tight", metadata=meta)
     plt.close(fig)
     print("wrote", name)
 
