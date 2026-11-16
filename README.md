@@ -121,6 +121,9 @@ Regenerate every figure (PNG and SVG in `analysis/figures/`) from the committed 
 analysis/.venv/bin/python analysis/make_figures.py
 ```
 
+`make_figures.py --numbers` prints the numbers quoted in the Results sections of
+`docs/experiment-plan.md`.
+
 The Q5 latency percentiles are read from `analysis/data/q5-latency-percentiles.tsv`. To
 recompute that table from the raw latency files (kept outside the repository), put them in
 `results/q5/<timestamp>/latencies/` and add `--rebuild-latency-table`.

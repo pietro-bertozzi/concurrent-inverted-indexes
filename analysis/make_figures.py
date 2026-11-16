@@ -91,12 +91,12 @@ def speedup(d, lang, value="build_ns", **where):
 
 # ----------------------------------------------------------------------------- drawing
 
-def hw_lines(ax, label=False):
+def hw_lines(ax, label=False, compact=False):
     """Vertical dashed lines at the hardware boundaries (numeric worker axis)."""
     for x, text in HW_LINES:
         ax.axvline(x, color="#a8a7a2", ls=(0, (4, 3)), lw=0.9, zorder=0.5)
         if label:
-            hw_label(ax, x, text)
+            hw_label(ax, x, str(x) if compact else text)
 
 
 def hw_label(ax, x, text, xpos=None):
@@ -299,27 +299,43 @@ def fig_q3():
 def fig_q3_cpu():
     d = load("q3")
     d["util"] = d.cpu_ns / (d.build_ns * d.threads) * 100
+    d["kernel"] = d.cpu_sys_ns / d.cpu_ns * 100
     ls_of = {"1": ":", "64": "-"}
     mk_of = {"1": "o", "64": "s"}
-    fig, axes = panels(4, 2, w=5.2, h=3.4)
-    for ax, lang in zip(axes, LANGS):
-        dl = d[d.language == lang]
-        for var, kw in [("partition-lock", {}), ("partition-writers", {"queue": "64"})]:
-            for batch in ["1", "64"]:
-                s = curve(dl, "util", variant=var, batch=batch, **kw)
-                ax.plot(s.index, s.values, color=COLOR[var], ls=ls_of[batch], marker=mk_of[batch], ms=3.5)
-        hw_lines(ax, label=(lang == LANGS[0]))
-        worker_axis(ax)
-        ax.set_ylim(0, 150)
-        ax.axhline(100, color=INK2, lw=0.9)
-        ax.set_ylabel("CPU time / (wall × workers) (%)")
-        ax.set_title(LANG_NAME[lang], loc="left", fontweight="bold")
-    h = [line(COLOR["partition-lock"], label="partition-lock"), line(COLOR["partition-writers"], label="partition-writers (mailbox 64)"),
-         line(INK2, ":", "o", "batch 1"), line(INK2, "-", "s", "batch 64")]
-    legend_below(fig, h, 4)
+    # (variant, batch, where): row 1 compares lock and messages at batches 1 and 64; row 2 shows the
+    # kernel share of partition-lock b64 and partition-writers b1 and b64.
+    rows = [("util", [("partition-lock", "1", {"partitions": "64"}), ("partition-lock", "64", {"partitions": "64"}),
+                      ("partition-writers", "1", {"queue": "64"}), ("partition-writers", "64", {"queue": "64"})]),
+            ("kernel", [("partition-lock", "64", {"partitions": "64"}),
+                        ("partition-writers", "1", {"queue": "64"}), ("partition-writers", "64", {"queue": "64"})])]
+    fig, axes = panels(8, 4, w=3.6, h=3.0)
+    for r, (col, series) in enumerate(rows):
+        for c, lang in enumerate(LANGS):
+            ax = axes[r * 4 + c]
+            dl = d[d.language == lang]
+            for var, batch, where in series:
+                s_ = curve(dl, col, variant=var, batch=batch, **where)
+                ax.plot(s_.index, s_.values, color=COLOR[var], ls=ls_of[batch], marker=mk_of[batch], ms=3.5)
+            hw_lines(ax, label=(r == 0), compact=True)
+            worker_axis(ax)
+            if col == "util":
+                ax.set_ylim(0, 150)
+                ax.axhline(100, color=INK2, lw=0.9)
+                ax.set_ylabel("CPU time / (wall × workers) (%)")
+            else:
+                ax.set_ylim(0, 100)
+                ax.set_ylabel("kernel share: sys / (user + sys) (%)")
+            ax.set_title(LANG_NAME[lang] + (" - CPU utilization" if r == 0 else " - kernel time"),
+                         loc="left", fontweight="bold", fontsize=9)
+    h = [line(COLOR["partition-lock"], label="partition-lock (64 partitions)"),
+         line(COLOR["partition-writers"], label="partition-writers (mailbox 64)"),
+         line(INK2, ":", "o", "batch 1"), line(INK2, "-", "s", "batch 64"),
+         line("#a8a7a2", (0, (4, 3)), label="dashed: 6 P-cores, 12 P-threads, 16 cores")]
+    legend_below(fig, h, 5)
     j = curve(d[d.language == "java"], "util", variant="partition-writers", batch="1", queue="64").loc[22]
-    title(fig, f"Q3: at batch 1 Java's threads sleep on a full mailbox (CPU falls to {j:.0f}%), "
-               f"while Go, C and C++ keep every core busy waiting")
+    k = [curve(d[d.language == l], "kernel", variant="partition-writers", batch="1", queue="64").loc[22] for l in ["cpp", "c"]]
+    title(fig, f"Q3: at batch 1 Java's threads sleep (CPU falls to {j:.0f}%), C and C++ spend {min(k):.0f}-{max(k):.0f}% "
+               f"of their CPU time in the kernel yielding, Go waits in user space")
     save(fig, "q3-cpu")
 
 
@@ -450,13 +466,56 @@ def fig_q5():
         save(fig, name)
 
 
+# ----------------------------------------------------------------------------- numbers
+
+def print_numbers():
+    """The numbers quoted in docs/experiment-plan.md that this script is the source of."""
+    q2 = load("q2"); q2 = q2[(q2.scaling == "strong") | (q2.variant == "sequential")]; q2 = q2[q2.corpus_mb == 128]
+    pl = {"partitions": "64", "batch": "64"}
+    print("Q2 merge share of private-merge total, 16 workers (%):")
+    for l in LANGS:
+        d = q2[q2.language == l]
+        print(f"  {l}: {curve(d, 'finalize_ns', variant='private-merge').loc[16] / curve(d, 'total_ns', variant='private-merge').loc[16] * 100:.1f}")
+    q2f = first_measured(q2)
+    print("Q2 peak memory, first measured repetition, MiB: private-merge 2 and 22 workers; partition-lock 2 and 22; ratio at 22")
+    for l in LANGS:
+        d = q2f[q2f.language == l]
+        a, b = curve(d, "peak_rss_bytes", variant="private-merge") / 2**20, curve(d, "peak_rss_bytes", variant="partition-lock", **pl) / 2**20
+        print(f"  {l}: {a.loc[2]:.0f} {a.loc[22]:.0f} | {b.loc[2]:.0f} {b.loc[22]:.0f} | {a.loc[22] / b.loc[22]:.2f}")
+    q4a, q4b = load("q4a"), load("q4b")
+    print("Q4 (C) static / dynamic - 1, in %, build and build + merge, unpinned then pinned:")
+    for name, d in [("unpinned", q4b), ("pinned", q4a)]:
+        d = d[d.language == "c"]
+        for col in ["build_ns", "total_ns"]:
+            r = (curve(d, col, variant="private-merge-static") / curve(d, col, variant="private-merge") - 1) * 100
+            print(f"  {name} {col}: " + " ".join(f"{w}:{v:.1f}" for w, v in r.items()))
+    dyn8 = curve(q4b[q4b.language == "c"], "total_ns", variant="private-merge").loc[8]
+    print(f"  static at 22 workers vs dynamic at 8 (total): {(curve(q4b[q4b.language == 'c'], 'total_ns', variant='private-merge-static').loc[22] / dyn8 - 1) * 100:.1f}%")
+    q3 = load("q3"); q3["kernel"] = q3.cpu_sys_ns / q3.cpu_ns * 100
+    print("Q3 kernel share at 22 workers, partition-writers batch 1 mailbox 64 (%):")
+    for l in LANGS:
+        print(f"  {l}: {curve(q3[q3.language == l], 'kernel', variant='partition-writers', batch='1', queue='64').loc[22]:.0f}")
+    q5 = load("q5"); lat = pd.read_csv(LAT_TABLE, sep="\t", dtype={"run": str})
+    print("Q5 p99 rwlock / plain lock, by workers:")
+    for l in ["java", "c"]:
+        for mo in ["query", "mixed-95-5", "mixed-50-50", "mixed-20-80"]:
+            la = lat[(lat.language == l) & (lat["mode"] == mo)]
+            r = curve(la, "p99_ns", variant="partition-rwlock") / curve(la, "p99_ns", variant="partition-lock")
+            print(f"  {l} {mo}: " + " ".join(f"{w}:{v:.2f}" for w, v in r.items()))
+
+
 # ----------------------------------------------------------------------------- main
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rebuild-latency-table", action="store_true",
                     help="recompute analysis/data/q5-latency-percentiles.tsv from the raw latency files")
+    ap.add_argument("--numbers", action="store_true",
+                    help="print the numbers quoted in docs/experiment-plan.md, then exit")
     args = ap.parse_args()
+    if args.numbers:
+        print_numbers()
+        return
     if args.rebuild_latency_table:
         build_latency_table()
     if not LAT_TABLE.exists():
