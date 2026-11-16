@@ -22,7 +22,7 @@ __pycache__/
 
 # Results (results/<experiment>/<timestamp>/): the final experiments are committed (results.tsv,
 # meta.txt, failures.tsv, runlist.tsv, logs/) without the raw latency files, which are large and go
-# to a GitHub release. Not committed: quick and dev runs, and results/full/ (a dress rehearsal,
+# to a GitHub release, if one is made. Not committed: quick and dev runs, and results/full/ (a dress rehearsal,
 # docs/design.md, section Layout).
 results/quick/
 results/dev/

@@ -9,18 +9,19 @@ the shared infrastructure and rules; `experiment-plan.md` fixes the questions an
 concurrent variants. Read both before any non-trivial change. If something in them looks
 wrong or incomplete, say so and ask. Never silently deviate.
 
-## Current phase: Analysis and report
+## Current phase: Presentation
 
 All three rounds of `docs/experiment-plan.md` are done. Every variant is implemented and
 passes `bench/check.sh` at every worker count: `sequential`, `global-lock`, `partition-lock`,
 `partition-writers`, `private-merge` and `private-merge-heap` in all four languages,
 `partition-rwlock` in Java and C, `private-merge-static` in C. Every experiment has run and is
 committed in `results/` (`q1`, `q2`, `q2b`, `q3`, `q4a`, `q4b`, `q5`, without the latency files,
-which go to a GitHub release); each question has a Results section in the plan.
+which are kept outside the repository; no GitHub release exists yet); each question has a Results section in the plan.
 `results/full/` was a dress rehearsal and is excluded from the analysis (design.md, Layout).
 
 `analysis/make_figures.py` (figures for Q1–Q5 in `analysis/figures/`, Q5 latency percentiles in
-`analysis/data/`) is done. What is left: the tables and the report.
+`analysis/data/`) is done, and so is the analysis. The README is written for outside readers (the repository is
+public). What is left: the presentation, the final deliverable.
 
 - Code shared by variants goes in each language's `_common/`.
 - `bench/check.sh` must pass for any new variant or change at every worker
