@@ -9,20 +9,22 @@ the shared infrastructure and rules; `experiment-plan.md` fixes the questions an
 concurrent variants. Read both before any non-trivial change. If something in them looks
 wrong or incomplete, say so and ask. Never silently deviate.
 
-## Current phase: Round 2: private-merge, partition-writers
+## Current phase: Analysis and report
 
-Round 1 (`global-lock`, `partition-lock`) is implemented and measured (Q1, `results/q1/`).
-Round 2 of `docs/experiment-plan.md` (section The implementations: Rules every variant
-follows, How each variant works, Order of work):
+All three rounds of `docs/experiment-plan.md` are done. Every variant is implemented and
+passes `bench/check.sh` at every worker count: `sequential`, `global-lock`, `partition-lock`,
+`partition-writers`, `private-merge` and `private-merge-heap` in all four languages,
+`partition-rwlock` in Java and C, `private-merge-static` in C. Every experiment has run and is
+committed in `results/` (`q1`, `q2`, `q2b`, `q3`, `q4a`, `q4b`, `q5`, without the latency files,
+which go to a GitHub release); each question has a Results section in the plan.
+`results/full/` was a dress rehearsal and is excluded from the analysis (design.md, Layout).
 
-- `private-merge` (`uses` none, modes build and query) is implemented in all four languages.
-  Q2 has not been run yet.
-- `partition-writers` (`uses` partitions, batch, queue; build and query) is next, in the
-  order Java, Go, C++, C.
+What is left: the Python analysis (`analysis/`: tables and plots from `results/*/*/results.tsv`)
+and the report.
+
 - Code shared by variants goes in each language's `_common/`.
-- `bench/check.sh` must pass for each new variant at every worker count before its
-  language is committed. One commit and push per language.
-- Round 3 (extras) comes later.
+- `bench/check.sh` must pass for any new variant or change at every worker
+  count before its language is committed. One commit and push per language.
 
 ## Rules that must not be broken without asking
 

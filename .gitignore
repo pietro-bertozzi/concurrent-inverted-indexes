@@ -1,6 +1,5 @@
 # Generated data: corpus prefixes, query files, raw Wikipedia dumps (data/raw/)
 data/*
-!data/.gitkeep
 # ...except the hand-made test data (tiny corpus, queries, expected canonical dump)
 !data/tiny/
 

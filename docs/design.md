@@ -86,7 +86,7 @@ The experiment space has two kinds of dimensions: **structural** choices change 
 
 ### Structural dimensions (one folder per combination)
 
-From the design space map. Detailed design of each comes later.
+From the design space map. The detailed design of each dimension, and the variants built from them, is in `docs/experiment-plan.md` (sections The problem space and The implementations).
 
 | Key | Options | Applies when |
 | --- | --- | --- |
@@ -128,7 +128,7 @@ modes	build,query,mixed-95-5,mixed-50-50,mixed-20-80
 | `SCALING` | how total work is set | strong · weak |
 | `PARTITIONS` | partitions, if used | 4 16 64 |
 | `BATCH` | postings per lock or message, if used | 1 64 1024 |
-| `QUEUE` | queue capacity, if used | to be sized |
+| `QUEUE` | queue capacity, if used | 4 and 64 (sized in Q3, `params-q3.sh`, which compares the two); `params.sh` sweeps both |
 | `PINNING`, `PCORES_CPUS` | CPU placement (`none` in `params.sh`, `pcores` in `params-pinned.sh`); CPUs used by `pcores` | none · pcores; 0-11 |
 | `OPS_TOTAL`, `OPS_PER_WORKER` | operations in a run: strong / weak | 100,000 / 5,000 |
 | `PRELOAD_DOCS`, `QUERY_COUNT`, `SEED` | documents preloaded in mixed modes; lines in the query file; base seed | 100,000; 100,000; 42 |
@@ -642,7 +642,7 @@ Adding a worker does not add a fixed amount of compute: speedup curves bend wher
 
 ### Thread values
 
-- Strong scaling: `1 2 4 6 8 12 14 16 22`. *Why: includes the hardware boundaries, which are marked on every plot.*
+- Strong scaling: `1 2 4 6 8 12 14 16 22`. *Why: includes the hardware boundaries, which are marked on every plot: 6 = the P-cores, 12 = the P-core threads, 14 = P- and E-cores, 16 = all cores, 22 = all threads.* The question files (`params-q*.sh`) use the same list without 14.
 - Weak scaling: `1 2 4 8 16`. *Why: doubling, to match the corpus doubling.*
 
 ### Pinning
@@ -660,6 +660,8 @@ Adding a worker does not add a fixed amount of compute: speedup curves bend wher
 ### Sizing measurements (sequential baselines)
 
 Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measurement columns of section Results, plus `language`, `corpus_mb` or `ops`, and `wall_s`; one row per repetition, warm-up included). Measured on 2026-11-15 on the benchmark machine, unpinned, one language at a time, with the four `sequential` variants, **no implementation changed**: `--threads 1 --repeat 1 --warmup 1`, 5 s pause between runs, and a guard that skipped the next corpus size of a language if twice the last peak would not fit in the free memory. Tables show the measured repetition (`warmup` 0); `peak_rss_bytes` is process-wide, so it includes the warm-up repetition (section Memory semantics).
+
+**These measurements, like `results/full/`, predate the refactor of the sequential variants and of the runner to Worker handles (round 1, 2026-11-15, commits `b3269e4` to `d50519a`).** The output is unchanged (`check.sh`), but the code that was timed is older than that of every experiment. They fixed sizes and memory budgets only (corpus sizes, `OPS_*`, `PRELOAD_DOCS`, `QUERY_CORPUS_MB`), not any result of the plan; every experiment measured `sequential` again.
 
 **Build mode, every corpus** (`--mode build`). B/posting is `peak_rss_bytes / postings`; "index only" subtracts the input text (corpus bytes, section Corpus sizes) first. Postings are identical in all four languages (a cross-check), as are documents and terms.
 
@@ -727,10 +729,10 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 
 ### Run conditions
 
-- Plugged in, performance power profile, other programs closed. The runner records the power source, swap use and CPU power profile (platform profile, governor, energy preference) in `meta.txt` before and after the sweep, and warns, without stopping, on battery power or if swap pages were moved during the sweep. The profile is recorded, not enforced; any warning is reported with the results.
+- Plugged in, performance power profile, other programs closed. The runner records the power source, swap use and CPU power profile (platform profile, governor, energy preference) in `meta.txt` before and after the sweep, and warns, without stopping, on battery power or if swap pages were moved during the sweep. The profile is recorded, not enforced; any warning is reported with the results. **In every final run (q1, q2, q2b, q3, q4a, q4b, q5) `meta.txt` shows the same CPU state before and after the sweep: power source `ac`, swap 0, platform profile `performance`, CPU governor `powersave` and energy preference `balance_performance`.** The governor and the preference are the defaults of the `intel_pstate` driver (active mode) on this machine and were not changed; the clock frequency was not recorded, so what this means for the speed of the cores is not measured.
 - Cool-down pauses between runs and randomized run order. *Why: thin laptops throttle when hot.*
 - Per-repetition rows make throttling visible as variability.
-- **Every experiment (one params file per question) takes about one hour, builds included: at most 70 minutes estimated.** *Why: a sweep that long can be run, repeated after a fix and kept under the same room temperature and power state; the full `params.sh` sweep is estimated at about 135 hours (range 120-250), which cannot be repeated or even run in one sitting.* The duration of a params file is estimated from a calibration run before it is used (short runs of each variant at a few worker counts, scaled to the run list), and a file whose estimate exceeds 70 minutes is cut down before it is run, never run as it is.
+- **Every experiment (one params file per question) takes about one hour, builds included: at most 70 minutes estimated.** *Why: a sweep that long can be run, repeated after a fix and kept under the same room temperature and power state; the full `params.sh` sweep is estimated at about 135 hours (range 120-250), which cannot be repeated or even run in one sitting. That estimate was made for the three variants that existed then (`sequential`, `global-lock`, `partition-lock`: 4,964 runs); with the variants added since, `params.sh` gives 11,547 runs (with `QUEUE="4 64"`), far longer, so it is not run and the experiments are the per-question files.* The duration of a params file is estimated from a calibration run before it is used (short runs of each variant at a few worker counts, scaled to the run list), and a file whose estimate exceeds 70 minutes is cut down before it is run, never run as it is. The one exception is Q2 (127 minutes estimated, 115 measured, run overnight; section Experiment Q2).
 
 ### Experiment Q1 (`bench/params-q1.sh`)
 
@@ -747,11 +749,13 @@ Raw data: `results/sizing/build.tsv` and `results/sizing/query.tsv` (the measure
 
 Other worker counts are interpolated on a log scale between the calibrated ones, batch 64 between batch 1 and 1024 on a log scale (so probably a little pessimistic). A run takes its fixed overhead (process start, from the calibration wall time) + 6 repetitions + the cool-down. Estimate: **66 minutes** (java 16.8, go 15.0, c++ 19.5, c 14.8; 14.6 of them cool-down), plus under a minute for the 12 builds. This is over the 55 minutes first proposed but **within the accepted limit (70 minutes)**, so `params-q1.sh` is accepted as it is: the largest single cost is `global-lock` with batch 1 at 8 or more workers in C and C++ (5 to 8 s per repetition, because the lock is contended on every posting). Candidate cuts (minutes after the cut): drop `BATCH` 64: 45; drop `PARTITIONS` 4: 47; drop worker counts 6 and 12: 51; drop 2 and 6: 50; `REPEAT=3`: 50; `COOLDOWN=1`: 56. The file is run as documented; the cuts are not applied.
 
+**Code that changed after Q1 ran (commit `f715948`), and why it does not matter.** Q1 measured `sequential`, `global-lock` and `partition-lock`. Afterwards (a) Java `PostingBuffer` got a constructor with an initial capacity and its growth rule changed from `size * 2` to `size * 2 + 1` (commit `81931fd`, for `partition-writers`): the buffers of `global-lock` and `partition-lock` start at 64 postings as before, make the same number of growth steps, and at batch 1024 end 15 slots larger (1039 instead of 1024); (b) in C, `workers_index` gained a `static_split` branch (read once per worker start, never per document, and 0 for every variant but `private-merge-static`), and in C and C++ the clock-cost loop sums into an unsigned integer (it is outside the timed phases). No code path of the three variants changed otherwise. The same variant measured again in Q2 (P = 64, batch 64, 128 MB, all four languages, 8 worker counts) differs from Q1 by at most 7% (Java at 12 workers) and by 4% or less at 31 of the 32 points. Q1 was not re-run.
+
 ### Experiment Q2 (`bench/params-q2.sh`)
 
 `EXPERIMENT=q2`, `MODES=build`, `SCALING="strong weak"`, `CORPUS_BASE_MB=128`, `CORPORA_MB="128 256 512 1024"` (the weak sizes), `THREADS="1 2 4 6 8 12 16 22"`, `THREADS_WEAK="1 2 4 8"`, `PARTITIONS=64`, `BATCH=64` (the best `partition-lock` of Q1), `VARIANTS="*/sequential */partition-lock */private-merge"`, `REPEAT=5`, `WARMUP=1`, `COOLDOWN=3`, `TIMEOUT=5m`; the rest is as in `params-q1.sh`. It passes the runner's validation and gives **272 runs**.
 
-**Open point: the runner runs strong scaling on every size of `CORPORA_MB`.** Weak scaling needs 256, 512 and 1024 MB in that list, so strong scaling also runs on them (4 sizes), not only on 128 MB as the plan says. With the file as it is the estimate is **127 minutes**, over the 70-minute limit, so the file is **not accepted and not run** until a decision. Running strong scaling on 128 MB only would give 104 runs and about **34 minutes**, but the runner cannot say that today (it would need a new parameter, for example a separate list of sizes for strong scaling).
+**The runner runs strong scaling on every size of `CORPORA_MB`, and the file was run as it is (decision taken, 2026-11-16).** Weak scaling needs 256, 512 and 1024 MB in that list, so strong scaling also runs on them (4 sizes), not only on 128 MB as the plan first said. The estimate was **127 minutes**, over the 70-minute limit; the file was accepted as the one exception to the rule and run overnight: **115 minutes measured**, no failures, `results/q2/`. Running strong scaling on 128 MB only would have been 104 runs and about 34 minutes, but the runner cannot say that (it would need a new parameter, for example a separate list of sizes for strong scaling), and it was not added.
 
 **Calibration** (1 warm-up + 2 repetitions per run, 128 MB, mean of load + build + finalize in seconds; `partition-lock` is P = 64, batch 64; `private-merge` is load + build, then finalize):
 
@@ -802,15 +806,15 @@ Q4 is two params files because one file has one `PINNING`. Both: `MODES=build`, 
 
 ## Open items
 
-The shared design is complete; what remains are the variant designs and numbers that need the first measurements.
+Everything is decided and every experiment has run; what remains is the analysis and the report (`analysis/`).
 
 - [x] Design the variants: which combinations of structural dimensions to implement, per language, and the question each one answers. Done in `docs/experiment-plan.md` (section The implementations); built in three rounds (section Order of work there).
-- [ ] Visibility check for mixed modes (what a query may observe). Includes how a concurrent variant keeps posting lists sorted while they are queried, since `AND` and `OR` merge sorted lists.
+- [x] Visibility check for mixed modes (what a query may observe), and how a concurrent variant keeps posting lists sorted while they are queried: decided in the plan (Rules every variant follows): a query may see a half-inserted document, and each insert puts the document ID in its place under the lock, so `AND` and `OR` can merge the lists directly. Checked by `check.sh` (mixed modes) and ThreadSanitizer.
 - [x] Preprocessing: markup stripping is settled by using a pre-extracted plain-text source (section Corpus); `corpus/extract.sh` (documents), `corpus/normalize.sh` (tokenization), `corpus/make-prefixes.sh` (prefixes) and `corpus/make-queries.sh` (queries) are implemented.
 - [x] Read the P-core and E-core CPU numbers for pinning: P-cores (with HT) are CPUs 0-11, E and LP E-cores are 12-21 (`/sys/devices/cpu_core/cpus`, `cpu_atom/cpus`).
 - [x] Confirm corpus sizes and the memory budget from measured bytes per posting (section Sizing measurements). Result: base 128 MB, largest size 2048 MB (4096 MB dropped: Java and Go would not fit).
-- [x] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable (section Sizing measurements): `QUERY_CORPUS_MB=512`, `PRELOAD_DOCS=100000`, `OPS_TOTAL=100000`, `OPS_PER_WORKER=5000`, `QUERY_COUNT=100000`. The runner's mixed-sizing check passes on the real corpus for all three params files. To confirm with the first full run: query cost on the 512 MB corpus (extrapolated).
+- [x] Size `--ops`, `--preload`, `QUERY_CORPUS_MB` and the query count so that runs and latency files stay manageable (section Sizing measurements): `QUERY_CORPUS_MB=512`, `PRELOAD_DOCS=100000`, `OPS_TOTAL=100000`, `OPS_PER_WORKER=5000`, `QUERY_COUNT=100000`. The runner's mixed-sizing check passes on the real corpus for every params file that has mixed modes. Confirmed by Q5, which runs on the 512 MB corpus: 40,000 query operations at 1 worker take 4.2 s (Java) and 3.6 s (C), so 100,000 take about 9–10 s, inside the extrapolated 8–11 s.
 - [x] Insert budget in mixed modes: exact operation counts, shuffled per worker with the shared generator (section Shared implementation rules); `check.sh` now checks mixed modes too.
 - [x] Fix compiler flags, JVM heap and GC settings, `GOMAXPROCS` (section Shared implementation rules, Build and runtime settings).
-- [ ] Tighten `TIMEOUT` after the first full runs.
+- [x] Tighten `TIMEOUT` after the first full runs: every question's params file sets `TIMEOUT=5m` (the slowest run is about 30 s); `params.sh` keeps 60m because it is not run.
 - [x] Decide how `results/<experiment>` folders are named: each params file sets `EXPERIMENT` (`full`, `pinned`, `quick`), so dev results land in ignored folders.
