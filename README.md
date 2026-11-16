@@ -180,6 +180,8 @@ and add `--rebuild-latency-table` to `make_figures.py`.
   interface, results format, measurement rules.
 - [`docs/experiment-plan.md`](docs/experiment-plan.md): the five questions, the predictions, the
   variants, and the full results and discussion of each experiment.
+- [`report.pdf`](report.pdf): the final presentation (in Italian): the five questions, the
+  results and the lessons.
 
 ## License and data
 
