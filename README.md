@@ -11,7 +11,7 @@ The full design (workload, data, CLI contract, results format, methodology) is i
 
 ```
 bench/       runner (run.sh), correctness check (check.sh), shared code (common.sh) and
-             parameter files (params.sh, params-pinned.sh, params-quick.sh, params-q1.sh to params-q5.sh;
+             parameter files (params.sh, params-pinned.sh, params-quick.sh, params-q1.sh to params-q5.sh, plus params-q2b.sh;
              Q4 has two: params-q4a.sh and params-q4b.sh)
 corpus/      preprocessing scripts: raw Wikipedia -> corpus, queries
 data/        generated corpus prefixes and query files (not committed); raw dumps in data/raw/
@@ -45,6 +45,7 @@ Run the benchmark:
 ./bench/run.sh bench/params-quick.sh    small sweep for development
 ./bench/run.sh bench/params-q1.sh       experiment Q1 (build, 128 MB, locks and batching), meant to take about one hour (66 minutes estimated)
 ./bench/run.sh bench/params-q2.sh       experiment Q2 (sharing or replicating, strong and weak scaling): estimated at 127 minutes, over the limit, not to be run until the open point in design.md is decided
+./bench/run.sh bench/params-q2b.sh      experiment Q2 follow-up (does the merge algorithm decide the answer? `private-merge-heap`, build, 128 MB): 36 runs, 6.5 minutes estimated
 ./bench/run.sh bench/params-q3.sh       experiment Q3 (locks or messages, build, 128 MB): 292 runs, 63 minutes estimated
 ./bench/run.sh bench/params-q4a.sh      experiment Q4, pinned control (P-cores only, up to 12 workers): 58 runs, 10 minutes
 ./bench/run.sh bench/params-q4b.sh      experiment Q4, static against dynamic handout, unpinned: 44 runs, 7 minutes
