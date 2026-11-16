@@ -18,7 +18,7 @@ data/        generated corpus prefixes and query files (not committed); raw dump
 impl/        impl/<language>/<variant>/ with build.sh, run.sh, dimensions.tsv
              folders starting with _ hold shared code, not variants
 results/     one folder per final experiment (q1 to q5, q2b): results.tsv, logs/, meta.txt; no latency files
-analysis/    Python analysis (later)
+analysis/    Python analysis (make_figures.py, figures/, data/); the only place where Python is allowed
 docs/        design document
 ```
 
@@ -92,7 +92,7 @@ and its follow-up on the merge algorithm, `q2b`), Q3 (`q3`), Q4 (`q4a`, `q4b`) a
 the plan has a Results section for each question. The raw latency files of Q5 are not in the
 repository (they go to a GitHub release). `results/full/` (a first sweep of the runner) is a dress
 rehearsal, kept locally and excluded from the analysis (`docs/design.md`, section Layout).
-Still to do: the Python analysis (`analysis/`) and the report.
+The figures are in `analysis/figures/` (see Analysis below). Still to do: the tables and the report.
 
 Java needs `javac` and `java` (JDK 25), Go needs `go` (no `go.mod`: `build.sh`
 compiles the sources from a copy in `build/src/`), C++ needs `g++`, C needs `gcc` (its hash map is our own, see `docs/design.md`). The corpus
@@ -102,3 +102,25 @@ params files come from the sizing measurements (`docs/design.md`, section Sizing
 ## License
 
 See [`LICENSE`](LICENSE).
+
+## Analysis
+
+The only Python in the repository lives in `analysis/` and needs exactly pandas, numpy and
+matplotlib (pinned in `analysis/requirements.txt`; the benchmark itself has no dependencies).
+Set up once (if `python3 -m venv` fails, install `python3-venv` with
+`sudo apt install python3-venv`):
+
+```bash
+python3 -m venv analysis/.venv
+analysis/.venv/bin/pip install -r analysis/requirements.txt
+```
+
+Regenerate every figure (PNG and SVG in `analysis/figures/`) from the committed results:
+
+```bash
+analysis/.venv/bin/python analysis/make_figures.py
+```
+
+The Q5 latency percentiles are read from `analysis/data/q5-latency-percentiles.tsv`. To
+recompute that table from the raw latency files (kept outside the repository), put them in
+`results/q5/<timestamp>/latencies/` and add `--rebuild-latency-table`.

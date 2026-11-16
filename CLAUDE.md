@@ -19,8 +19,8 @@ committed in `results/` (`q1`, `q2`, `q2b`, `q3`, `q4a`, `q4b`, `q5`, without th
 which go to a GitHub release); each question has a Results section in the plan.
 `results/full/` was a dress rehearsal and is excluded from the analysis (design.md, Layout).
 
-What is left: the Python analysis (`analysis/`: tables and plots from `results/*/*/results.tsv`)
-and the report.
+`analysis/make_figures.py` (figures for Q1–Q5 in `analysis/figures/`, Q5 latency percentiles in
+`analysis/data/`) is done. What is left: the tables and the report.
 
 - Code shared by variants goes in each language's `_common/`.
 - `bench/check.sh` must pass for any new variant or change at every worker
@@ -43,7 +43,9 @@ and the report.
   (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git`,
   plus the language toolchains (`javac`/`java`, `go`, `g++`, `gcc`). Implementations use
   only their language's standard library: no Maven/Gradle, no third-party modules.
-  Ask before adding any tool or package.
+  Ask before adding any tool or package. **One exception:** Python, only in `analysis/`, with
+  exactly pandas, numpy and matplotlib (pinned in `analysis/requirements.txt`, venv at
+  `analysis/.venv`, git-ignored); the benchmark itself keeps this rule (design.md, Analysis plan).
 - **Identical work in every language:** splitmix64 from `_common/`, never a built-in
   generator; exact operation counts and draw order as in design.md. A deviation here
   silently breaks cross-language comparison.

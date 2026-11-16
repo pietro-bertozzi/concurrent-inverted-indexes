@@ -67,7 +67,7 @@ impl/
       ...
   java/  cpp/  c/   same structure
 results/            one folder per experiment
-analysis/           Python notebooks and scripts (later)
+analysis/           Python analysis: make_figures.py, requirements.txt, data/ (committed tables), figures/ (PNG and SVG)
 ```
 
 **Rules**
@@ -562,7 +562,11 @@ Python reads the final `results.tsv` and the latency files and computes the stan
 | Variability | std. deviation, coefficient of variation | predictability; lock-heavy variants are often less stable |
 | Latency | p50, p95, p99, max from raw latencies | typical and tail query cost (query and mixed modes) |
 
-Plots mark the hardware boundaries (6, 14, 16, 22 workers) so that hardware effects are never mistaken for algorithm effects.
+Plots mark the hardware boundaries (6, 12 and 16 workers: P-cores, P-core threads, all cores) so that hardware effects are never mistaken for algorithm effects.
+
+**The analysis code.** `analysis/make_figures.py` is one script, no notebook. It reads the committed `results/{q1,q2,q2b,q3,q4a,q4b,q5}/*/results.tsv` (never `results/full/`) and writes `analysis/figures/*.png` and `*.svg`; it uses only the measured repetitions (`warmup` 0) and plots medians. Conventions: one color per variant, the same in every figure, and the language is a panel; CPU utilization is `(cpu_user_ns + cpu_sys_ns) / (build_ns × threads)`; speedup is the median of the language's `sequential` over the median of the point, `build_ns` for Q1 and `build_ns + finalize_ns` for Q2 and Q4, as in the plan's Results sections; memory uses the first measured repetition (section Memory semantics). The Q5 percentiles (p50, p95, p99, max, per measured repetition of every run, linear interpolation) are computed once from the local raw latency files with `--rebuild-latency-table` and saved in `analysis/data/q5-latency-percentiles.tsv` (committed), which the script then reads: *why: the latency files are not in the repository (200 MB), and every figure must be regenerable from the repository alone.* The Q5 p99 figure plots the median over repetitions of each repetition's p99. Latencies still include the clock reading cost (section Latency).
+
+**Exception to the no-dependency rule.** Python is allowed only in `analysis/`, with exactly `pandas`, `numpy` and `matplotlib`, pinned in `analysis/requirements.txt` and installed in a git-ignored virtual environment `analysis/.venv` (setup in `README.md`). *Why: the benchmark itself keeps its rule (bash, standard tools, language toolchains, standard libraries); the analysis runs after the measurements and cannot disturb them, and tables and plots are impractical without a data library.*
 
 Hardware counters (cache misses, false sharing via `perf`) are out of scope for now: insightful but platform-specific and an extra tool. A possible later deep dive.
 
@@ -621,7 +625,7 @@ the	0:2 1:2
 
 - **Timeouts are generous:** 30 minutes per run to start, tightened later to several times the slowest normal run. *Why: a deadlock would otherwise hang an overnight run forever; standard `timeout` adds no dependency.*
 - **Build and runtime settings are fixed and recorded:** compiler flags in `build.sh`, JVM heap (`-Xmx`) in `run.sh`, `GOMAXPROCS` left at its default and logged (section Shared implementation rules, Build and runtime settings). *Why: fairness depends on how code is compiled and run, not just on the code.*
-- **No dependencies beyond bash and standard Linux tools:** coreutils (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git` (only for the `commit` column; `unknown` without it).
+- **No dependencies beyond bash and standard Linux tools** (the one exception, Python in `analysis/` only, is in section Analysis plan): coreutils (including `timeout`), `awk`, `sed`, `taskset` (util-linux), `cmp` (diffutils) and `git` (only for the `commit` column; `unknown` without it).
 
 ## Hardware and methodology
 
