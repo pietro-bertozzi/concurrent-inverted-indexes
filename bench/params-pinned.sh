@@ -23,7 +23,7 @@ QUERY_CORPUS_MB=512
 # One value each: the control is about the thread count, not about these parameters.
 PARTITIONS="16"
 BATCH="64"
-QUEUE="1024"
+QUEUE="4 64"        # queue capacity (partition-writers only), as in params.sh
 
 PINNING="pcores"
 PCORES_CPUS="0-11"

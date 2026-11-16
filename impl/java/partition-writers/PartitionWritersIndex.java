@@ -40,7 +40,8 @@ final class PartitionWritersIndex implements Index {
     private final AtomicInteger finished = new AtomicInteger();   // flush calls that have sent everything, over all phases
     private final LongAdder docs = new LongAdder();
 
-    @SuppressWarnings("unchecked")
+    // Java cannot create an array of a generic type: the raw array only ever holds ArrayBlockingQueue<Message>.
+    @SuppressWarnings({"unchecked", "rawtypes"})
     PartitionWritersIndex(int partitions, int batch, int queue, int workers) {
         this.parts = new Partition[partitions];
         for (int p = 0; p < partitions; p++) parts[p] = new Partition();

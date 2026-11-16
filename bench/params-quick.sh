@@ -16,7 +16,7 @@ QUERY_CORPUS_MB=8      # query and mixed modes run on this one corpus
 
 PARTITIONS="4 16"
 BATCH="1 64"
-QUEUE="1024"
+QUEUE="1024"       # queue capacity (partition-writers only): a development value
 
 PINNING="none pcores"   # both, so that development also exercises the taskset path
 PCORES_CPUS="0-11"

@@ -12,7 +12,8 @@ MODES="build query mixed-95-5 mixed-50-50 mixed-20-80"
 # Scaling kinds. strong: fixed total work, more workers. weak: work proportional to N.
 SCALING="strong weak"
 
-# Worker counts. Strong values include the hardware boundaries (6, 14, 16, 22).
+# Worker counts. Strong values include the hardware boundaries (docs/design.md, Thread values):
+# 6 P-cores, 12 P-core threads, 14 P- and E-cores, 16 cores, 22 threads.
 THREADS="1 2 4 6 8 12 14 16 22"
 THREADS_WEAK="1 2 4 8 16"
 
@@ -36,7 +37,7 @@ QUERY_CORPUS_MB=512
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 16 64"
 BATCH="1 64 1024"
-QUEUE="1024"        # queue capacity: placeholder, to be sized (design.md, Open items)
+QUEUE="4 64"        # queue capacity (partition-writers only): sized in docs/design.md, Numeric parameters; params-q3.sh compares the two
 
 # CPU placement: none = the OS schedules freely; pcores = taskset on the P-core threads.
 # Runs with more workers than PCORES_CPUS has CPUs are skipped when pinned. The main

@@ -16,7 +16,8 @@ MODES="build"
 # Scaling kinds. strong: fixed total work, more workers. weak: work proportional to N.
 SCALING="strong"
 
-# Worker counts. Strong values include the hardware boundaries (6, 14, 16, 22).
+# Worker counts. Strong values include the hardware boundaries (docs/design.md, Thread values):
+# 6 P-cores, 12 P-core threads, 16 cores, 22 threads; 14 (P- and E-cores) is only in params.sh.
 THREADS="1 2 4 6 8 12 16 22"
 THREADS_WEAK="1 2 4 8 16"
 
@@ -39,7 +40,7 @@ VARIANTS="*/sequential */global-lock */partition-lock"
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 64"
 BATCH="1 64 1024"
-QUEUE="1024"        # queue capacity: placeholder, to be sized (design.md, Open items)
+QUEUE="1024"        # queue capacity: used by partition-writers only, which this file does not run (sized in params-q3.sh: 4 and 64)
 
 # CPU placement: none = the OS schedules freely; pcores = taskset on the P-core threads.
 # Runs with more workers than PCORES_CPUS has CPUs are skipped when pinned. The main
