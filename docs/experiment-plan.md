@@ -372,7 +372,7 @@ The answer to Q2: in this implementation, **sharing wins**. `partition-lock` bea
 
 **1. Best build time at every N: contradicted on the total, confirmed on the build alone.** The lock-free build of `private-merge` is faster than `partition-lock` from 2 workers up in Go, C++ and C (up to 1.6× in C; a tie in Java). On build + merge, `partition-lock` is faster at every N ≥ 2 in all four languages (time ratio 0.47–0.90 at 128 MB). At 1024 MB the picture is the same, less sharp (Go ties up to 12 workers).
 
-**2. The merge is 10–25% of the total: contradicted.** At 16 workers it is 27% (Java), 31% (Go), 49% (C++), 66% (C); only Java at 256–1024 MB falls in the range. The key observation: **the merge time is flat in the number of workers** (C: 0.26–0.32 s from 2 to 22 workers). The likely reason: with N workers each term appears in up to N private indexes, so the total merge work grows with N while the number of merging threads also grows with N, and the two cancel; merging is also mostly memory traffic (reading N lists, writing one), which more threads do not speed up. To be checked before the report: how the N-way merge is implemented (a linear scan of the N heads costs N comparisons per posting; a heap would cost about log N).
+**2. The merge is 10–25% of the total: contradicted.** At 16 workers it is 27% (Java), 31% (Go), 49% (C++), 66% (C); only Java at 256–1024 MB falls in the range. The key observation: **the merge time is flat in the number of workers** (C: 0.26–0.32 s from 2 to 22 workers). The likely reason: with N workers each term appears in up to N private indexes, so the total merge work grows with N while the number of merging threads also grows with N, and the two cancel; merging is also mostly memory traffic (reading N lists, writing one), which more threads do not speed up. How the N-way merge is implemented (a linear scan of the N heads, N comparisons per posting) and whether a heap would change the picture is answered by the follow-up below (Q2b).
 
 **3. Memory grows with N: confirmed for C, C++ and Go; unclear for Java.** At 128 MB, from 1 to 22 workers, `private-merge` grows 418 → 686 MB in C (+64%) and 321 → 596 MB in C++ (+86%), while `partition-lock` stays flat; it uses up to 2× the memory of `partition-lock`. In Java both grow, and the JVM heap sizing hides the effect.
 
@@ -392,17 +392,27 @@ The answer: **no. Sharing still wins with a better merge, so the Q2 result does 
 - *If it falls a lot at high N:* the linear scan was the cost, and Q2 must be read as "replicating with a naive merge"; the heap result is then the fair one for the comparison with `partition-lock`.
 - *Prediction:* a small difference up to 6 workers (k is small, and a heap costs more per comparison than a scan: swaps, unpredictable branches), a gain growing with N above 8 for the common terms (k close to N), and little change in total time, because most terms are rare (k = 1, no merge at all) and the build dominates. The heap may even lose at small N.
 
-**Run.** `results/q2b/20261116-164124/`: 36 runs × (1 + 5), about 7 minutes, no failures; build, 128 MB, strong. Compared with `private-merge` and `partition-lock` (P64 B64) from the night run under the same conditions.
+**Run.** `results/q2b/20261116-164124/`: 36 runs × (1 + 5), about 7 minutes, no failures; build, 128 MB, strong. Compared with `private-merge` and `partition-lock` (P64 B64) from the night run (`results/q2/`), and with the second measurement of `private-merge` in `results/q4b/`. Medians of the 5 repetitions.
 
-| 22 workers, 128 MB | Java | Go | C++ | C |
+| Merge time (`finalize_ns`), 22 workers, 128 MB | Java | Go | C++ | C |
 | --- | --- | --- | --- | --- |
-| merge, linear scan | 0.12 s | 0.17 s | 0.29 s | 0.30 s |
-| merge, heap | 0.06 s | 0.14 s | 0.28 s | 0.27 s |
-| change | −50% | −20% | −5% | −10% |
+| linear scan, Q2 | 0.117 s | 0.170 s | 0.295 s | 0.294 s |
+| linear scan, Q4b (same variant, another run) | 0.143 s | 0.140 s | 0.296 s | 0.299 s |
+| heap, Q2b | 0.060 s | 0.139 s | 0.276 s | 0.271 s |
+| change, heap against Q2 | −48% | −18% | −7% | −8% |
 
-The heap helps Java clearly, Go somewhat, and C and C++ hardly at all; and the merge time stays flat as workers grow. In C at 22 workers, `private-merge-heap` totals about 0.41 s against 0.22 s for `partition-lock`, so the gap remains wide.
+| Total (build + merge), 22 workers | Java | Go | C++ | C |
+| --- | --- | --- | --- | --- |
+| `private-merge-heap` / `partition-lock` | 0.43 / 0.39 s | 0.44 / 0.38 s | 0.54 / 0.32 s | 0.41 / 0.22 s |
 
-**What it shows.** The prediction that a heap would bring `private-merge` close to a tie was wrong, and the reason is informative: the merge's cost was not the comparisons but the **memory traffic**: reading N lists scattered through RAM, writing the merged list, looking each term up in N maps. More threads do not speed that up, because they share the same memory. It is the same suspect as Q1's ceiling for `partition-lock` and Q2's weak scaling: memory, not synchronization, limits this workload at high worker counts (a hypothesis consistent with all three results, not measured directly, since no bandwidth counters were read).
+- **Java:** the heap halves the merge, and the merge now shrinks as workers are added: 0.125 s at 2 workers, 0.060 s at 22 (the linear scan stayed at 0.11–0.13 s). The gain grows with the number of workers (heap against linear scan: 1.02 at 2 workers, 0.74 at 6, 0.52 at 22).
+- **Go:** the merge also shrinks with workers (0.225 s at 2, 0.139 s at 22), but its gain at 22 workers is within the spread of the linear baseline itself: the same linear variant gave 0.170 s in Q2 and 0.140 s in Q4b, and the heap gave 0.139 s. It is not a measured gain.
+- **C and C++:** the merge changes by 5–10% (0.29 → 0.27–0.28 s), within noise, and stays flat in the number of workers (C++ 0.25–0.28 s, C 0.25–0.31 s from 2 to 22 workers).
+- **`partition-lock` keeps the lower total in every language** (table above). With the heap `private-merge` totals change by at most 15% (Java), 7% (Go) and 5% (C++, C) against the linear scan, nowhere near the 20–40% needed to close the gap.
+
+**This confirms the Q2b prediction recorded before the run:** no difference up to 4–6 workers (merge time against the linear scan 0.93–1.05 in all four languages, so the heap does not win at small N, and at 2 workers it is 2–4% slower in the total for Java and C, within noise), a gain that grows with N where the comparisons mattered, and little change in the total because the build dominates and most terms are rare. The Q2 result therefore does not depend on the merge algorithm.
+
+**What it shows.** In Java the linear scan did cost something at high N: the merge halves with the heap. In C and C++ it did not (5–10%), and in Go the effect is not measurable, so there the merge's cost is not the comparisons. The likely reason, a hypothesis consistent with these numbers and not measured (no memory bandwidth counters were read), is memory traffic: reading N lists scattered through RAM, writing the merged list, looking each term up in N maps, which more threads do not speed up because they share the same memory. It is the same suspect as Q1's ceiling for `partition-lock` and Q2's weak scaling.
 
 ### Q3. Locks or messages?
 
