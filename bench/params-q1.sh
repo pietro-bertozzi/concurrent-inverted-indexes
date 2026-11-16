@@ -32,6 +32,10 @@ CORPORA_MB="128"
 # measurements: 203,212 documents, enough for PRELOAD_DOCS plus the largest insert budget.
 QUERY_CORPUS_MB=128
 
+# Variants this question needs (docs/design.md, Numeric parameters): the ones that existed when
+# Q1 ran, so that the file gives the 292 runs measured in results/q1/ however many variants are added later.
+VARIANTS="*/sequential */global-lock */partition-lock"
+
 # Numeric parameters swept only for variants that list them in `uses`.
 PARTITIONS="4 64"
 BATCH="1 64 1024"
